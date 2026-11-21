@@ -132,6 +132,8 @@ async function api(p,o={}){
   if(r.status===401){$("#keybar").classList.add("show");$("#key").focus();showErr("需要管理密钥（401）— CPAMP 登录勾选「记住密码」可免输");throw 0}
   const t=await r.text();
   if(!r.ok){let m=t;try{m=JSON.parse(t).error?.message||t}catch(_){}
+    if(r.status===502&&/connection refused|dial tcp/i.test(m))
+      m="管理端不可达（"+m+"）\n请检查 CPAMP 里配置的 CPA 地址和端口，CPA 需要正在运行。";
     showErr("请求失败 "+r.status+"  "+p+"\n"+m);throw r}
   showErr("");return JSON.parse(t)
 }
@@ -153,7 +155,7 @@ function quotaRows(a){
   return SLOTS.map(([k,name])=>{
     const w=m[k];
     if(!w||w.used_pct==null)
-      return`<div class="q na" title="尚未获取用量数据"><span class="q-name">${name}</span><span class="q-meta"><b>—</b><span>读取中</span></span></div>`;
+      return`<div class="q na" title="尚未获取用量数据（产生请求或点击恢复后自动获取）"><span class="q-name">${name}</span><span class="q-meta"><b>—</b></span></div>`;
     const left=Math.max(0,100-w.used_pct),used=Math.min(w.used_pct,100);
     const blocked=w.used_pct>=100&&new Date(w.until)>new Date();
     const tone=blocked?"danger":left<30?"danger":left<=70?"warn":"ok";
@@ -232,7 +234,7 @@ async function act(a,action,e){
     if(action==="u")await api("/account/unblock",{method:"POST",body:JSON.stringify({id:a.id})});
     if(action==="e")await api("/account",{method:"PATCH",body:JSON.stringify({id:a.id,enabled:a.enabled===false})});
     if(action==="x"){
-      if(!confirm("删除账号 "+(a.label||a.id)+"？（宿主侧登录文件由 CPA 管理，不删除）"))return;
+      if(!confirm("删除账号 "+(a.label||a.id)+"？\n删除后不会再出现在本面板（CPA 里的登录文件仍保留，可在 CPA 中另行删除）。"))return;
       await api("/account?id="+encodeURIComponent(a.id)+"&purge=true",{method:"DELETE"});
       sel=null
     }

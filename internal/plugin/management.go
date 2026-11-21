@@ -179,6 +179,11 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 		snap := p.store.Snapshot()
 		views := make([]accountView, 0, len(snap.Accounts))
 		for id, acc := range snap.Accounts {
+			// 已删除账号（墓碑）与误入的其他 provider 账号不得出现在面板。
+			if p.store.IsPurged(id) || p.foreignAccount(id) {
+				p.store.PurgeAccount(id)
+				continue
+			}
 			p.refreshUsage(id) // 后台拉 /usage 填充窗口（节流），下次轮询可见
 			views = append(views, p.viewOf(id, acc, snap, false))
 		}
@@ -188,6 +193,9 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 		id := queryID(query, payload, true)
 		if id == "" {
 			return mgmtError(400, "invalid_request", "id required")
+		}
+		if p.store.IsPurged(id) {
+			return mgmtError(404, "account_not_found", "no such account")
 		}
 		snap := p.store.Snapshot()
 		acc, ok := snap.Accounts[id]
@@ -334,8 +342,8 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 			return mgmtError(400, "invalid_request", "id required")
 		}
 		if query != nil && query.Get("purge") == "true" {
-			// 硬删插件侧状态；host auth 文件归 host 管（ABI 无删除回调）。
-			p.store.SetEnabled(id, false)
+			// 硬删插件侧状态并留墓碑；host auth 文件归 host 管（ABI 无删除
+			// 回调），墓碑保证重启/usage 事件都不会把它带回来。
 			p.store.PurgeAccount(id)
 			if p.bridge != nil {
 				_ = p.bridge.ResetCooldown(id)
@@ -390,6 +398,7 @@ func (p *Plugin) materializeAccount(name, key string) (string, error) {
 			return "", err
 		}
 	}
+	p.store.ClearPurge(id) // 同一 key 重新添加 = 撤销删除
 	p.store.EnsureAccount(id)
 	return id, nil
 }
@@ -456,23 +465,51 @@ func (p *Plugin) authInfoFor(id string) (string, string) {
 // labelFromID derives a readable label from an auth id when nothing better
 // is stored.
 func labelFromID(id string) string {
-	if tail := strings.SplitN(id, ":", 2); len(tail) == 2 && len(tail[1]) >= 4 {
-		return tail[1][:4] + "…" + tail[1][len(tail[1])-4:]
+	parts := strings.SplitN(id, ":", 2)
+	if len(parts) != 2 {
+		return id
+	}
+	tail := parts[1]
+	if i := strings.LastIndex(tail, ":"); i >= 0 && i+1 < len(tail) {
+		tail = tail[i+1:]
+	}
+	if len(tail) >= 4 {
+		return "未命名 · " + tail[:4] + "…" + tail[len(tail)-4:]
 	}
 	return id
 }
 
-// refreshUsage pulls /usage in the background (throttled to one call per
-// account per minute) so window bars appear without waiting for a 429.
+// foreignAccount reports a store record that belongs to another provider
+// (e.g. claude:apikey:…), seeded by the host-global usage stream. Such ids
+// are never created by this plugin (materialize always uses ProviderID).
+func (p *Plugin) foreignAccount(id string) bool {
+	if strings.HasPrefix(id, ProviderID+":") || p.bridge == nil {
+		return false
+	}
+	raw, err := p.bridge.AuthGet(id)
+	if err != nil || len(raw) == 0 {
+		return false // unknown ≠ foreign: never purge on a transient FFI error
+	}
+	st := parseStorage(raw)
+	return st.Type != "" && st.Type != ProviderID
+}
+
+// usageRefreshInterval bounds how often the panel silently polls each
+// account's quota endpoint. One minute looked like "一直探测"; five minutes
+// is plenty for quota bars and keeps upstream traffic quiet.
+const usageRefreshInterval = 5 * time.Minute
+
+// refreshUsage pulls /usage in the background (throttled) so window bars
+// appear without waiting for a 429.
 func (p *Plugin) refreshUsage(id string) {
-	if p.bridge == nil {
+	if p.bridge == nil || p.store.IsPurged(id) {
 		return
 	}
 	p.usageFetchMu.Lock()
 	if p.usageFetched == nil {
 		p.usageFetched = map[string]time.Time{}
 	}
-	if t, ok := p.usageFetched[id]; ok && time.Since(t) < time.Minute {
+	if t, ok := p.usageFetched[id]; ok && time.Since(t) < usageRefreshInterval {
 		p.usageFetchMu.Unlock()
 		return
 	}

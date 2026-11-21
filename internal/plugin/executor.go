@@ -168,6 +168,9 @@ func (p *Plugin) bindSession(authID string, hdrs http.Header, body []byte) {
 	if strings.HasPrefix(sid, "verify-") {
 		return
 	}
+	if p.store.IsPurged(authID) {
+		return
+	}
 	p.store.Bind(sid, authID, time.Now())
 }
 

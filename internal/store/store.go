@@ -69,6 +69,10 @@ type state struct {
 	Generation uint64              `json:"generation"`
 	Accounts   map[string]*Account `json:"accounts"`
 	Bindings   map[string]*binding `json:"bindings"`
+	// Purged tombstones account ids the operator deleted. Host auth files
+	// cannot be removed through this ABI, so every register-time Reconcile
+	// would otherwise resurrect deleted accounts from the host auth list.
+	Purged map[string]bool `json:"purged,omitempty"`
 }
 
 // Store is the in-memory state with optional file persistence.
@@ -88,6 +92,7 @@ func New(dir string) *Store {
 			Version:  2,
 			Accounts: map[string]*Account{},
 			Bindings: map[string]*binding{},
+			Purged:   map[string]bool{},
 		},
 		inflight:   map[string]int{},
 		dir:        dir,
@@ -395,19 +400,41 @@ func dropLRU(lru []string, doomed map[string]bool) []string {
 
 // —— 对账与持久化 ——
 
+// IsPurged reports whether an account was deleted by the operator. Purged
+// accounts are hidden from the panel and never resurrected by usage events
+// or host reconciliation (the host auth file itself cannot be removed here).
+func (s *Store) IsPurged(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.st.Purged[id]
+}
+
+// ClearPurge lets a re-added account out of the tombstone (same key).
+func (s *Store) ClearPurge(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.st.Purged[id] {
+		delete(s.st.Purged, id)
+		s.st.Generation++
+	}
+}
+
 // Reconcile aligns accounts with the live host auth set: drops orphans and
-// initializes newcomers.
+// initializes newcomers, while tombstoned ids stay deleted.
 func (s *Store) Reconcile(live map[string]bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	changed := false
 	for id := range s.st.Accounts {
-		if !live[id] {
+		if !live[id] || s.st.Purged[id] {
 			delete(s.st.Accounts, id)
 			changed = true
 		}
 	}
 	for id := range live {
+		if s.st.Purged[id] {
+			continue
+		}
 		if _, ok := s.st.Accounts[id]; !ok {
 			s.st.Accounts[id] = &Account{Windows: map[string]*Window{}}
 			changed = true
@@ -459,6 +486,9 @@ func Load(path string) (*Store, error) {
 	}
 	if st.Bindings == nil {
 		st.Bindings = map[string]*binding{}
+	}
+	if st.Purged == nil {
+		st.Purged = map[string]bool{}
 	}
 	sids := make([]string, 0, len(st.Bindings))
 	for sid, b := range st.Bindings {
@@ -513,9 +543,12 @@ func (s *Store) StartAutoFlush(interval time.Duration) (stop func()) {
 func (s *Store) PurgeAccount(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.st.Accounts[id]; !ok {
-		return
+	// Tombstone even when the record is already gone: usage events keep
+	// arriving for host auths and would recreate it on the next record.
+	if s.st.Purged == nil {
+		s.st.Purged = map[string]bool{}
 	}
+	s.st.Purged[id] = true
 	delete(s.st.Accounts, id)
 	delete(s.inflight, id)
 	doomed := map[string]bool{}

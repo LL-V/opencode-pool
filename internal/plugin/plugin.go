@@ -17,7 +17,7 @@ import (
 const (
 	PluginID      = "opencode-pool"
 	ProviderID    = "opencode-go"
-	PluginVersion = "0.2.2"
+	PluginVersion = "0.2.3"
 )
 
 // Plugin is the assembled capability set plus runtime state.
@@ -122,6 +122,10 @@ type storeDeps struct {
 }
 
 func (d storeDeps) Bad(id string) bool {
+	// 已删除账号：宿主 auth 文件仍在候选列表里，必须永不选中。
+	if d.p.store.IsPurged(id) {
+		return true
+	}
 	acc := d.p.store.Snapshot().Accounts[id]
 	if acc == nil {
 		return false

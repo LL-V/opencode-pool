@@ -13,12 +13,10 @@ func (p *Plugin) quotaFetch(request []byte) ([]byte, error) {
 	if err := json.Unmarshal(request, &req); err != nil {
 		return nil, err
 	}
-	// 主动路径：先经宿主通道拉一次真实 /usage（面板打开/详情展开触发）。
-	if p.bridge != nil && req.AuthID != "" {
-		if raw, err := p.bridge.AuthGet(req.AuthID); err == nil {
-			st := parseStorage(raw)
-			p.fetchAndApplyUsage(req.AuthID, st.APIKey, st.BaseURL)
-		}
+	// 主动路径：宿主会按自己的节奏反复调 quota.fetch；这里复用面板同一个
+	// 节流器（5 分钟/账号），否则上游 /usage 会被持续探测。
+	if req.AuthID != "" && !p.store.IsPurged(req.AuthID) {
+		p.refreshUsage(req.AuthID)
 	}
 	snap := p.store.Snapshot()
 	acc := snap.Accounts[req.AuthID]
