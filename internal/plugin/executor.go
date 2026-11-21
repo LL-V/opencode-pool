@@ -159,9 +159,16 @@ func (p *Plugin) execute(request []byte, stream bool) ([]byte, error) {
 // SessionID 为空），executor 是它们唯一的绑定写入点；派生键 d- 稳定于首条
 // user 消息，b-（body 哈希）逐请求变化无亲和价值，跳过。
 func (p *Plugin) bindSession(authID string, hdrs http.Header, body []byte) {
-	if sid := session.Resolve(hdrs, body); sid != "" && !strings.HasPrefix(sid, "b-") {
-		p.store.Bind(sid, authID, time.Now())
+	sid := session.Resolve(hdrs, body)
+	if sid == "" || strings.HasPrefix(sid, "b-") {
+		return
 	}
+	// 宿主对每个凭据周期发健康探测（verify-<auth>-<ts>，一次一变）——
+	// 绑定它们只会污染 LRU，跳过。
+	if strings.HasPrefix(sid, "verify-") {
+		return
+	}
+	p.store.Bind(sid, authID, time.Now())
 }
 
 // executeStream serves executor.execute_stream. pluginStreamID 非空时走

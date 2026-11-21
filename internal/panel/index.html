@@ -32,10 +32,10 @@ h1 small{color:var(--muted);font-weight:400;font-size:12px;margin-left:8px}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding-top:11px;border-top:1px solid var(--line)}
 .stat b{display:block;font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
 .stat span{font-size:10.5px;color:var(--muted)}
-.card .ops{display:flex;gap:4px;margin-top:11px;opacity:0;transition:opacity .15s}
-.card:hover .ops,.card:focus-within .ops{opacity:1}
-.ops button{border:0;background:none;color:var(--muted);font:12px inherit;cursor:pointer;padding:3px 8px;border-radius:5px}
+.card .ops{display:flex;gap:2px;margin-top:10px}
+.ops button{border:0;background:#f3f4f6;color:var(--muted);font:12px inherit;cursor:pointer;padding:3px 10px;border-radius:5px}
 .ops button:hover{background:var(--hover);color:var(--accent)}
+#drawer .acts button{background:var(--card)}
 .ops button.danger:hover{color:var(--red)}
 .empty{color:var(--muted);text-align:center;padding:56px 0;font-size:14px}
 #drawer{position:fixed;top:0;right:-420px;width:400px;max-width:92vw;height:100%;background:var(--card);border-left:1px solid var(--line);transition:right .2s;overflow-y:auto;padding:22px 24px;box-shadow:-8px 0 32px rgba(0,0,0,.05)}
@@ -129,7 +129,7 @@ function winRow(w){
 }
 function render(){
   const g=$("#grid");g.innerHTML="";
-  const acc=data.accounts||[];
+  const acc=[...(data.accounts||[])].sort((a,b)=>(a.label||a.id).localeCompare(b.label||b.id)||a.id.localeCompare(b.id));
   $("#sum").textContent=acc.length?`${acc.length} 个账号 · ${acc.filter(a=>a.enabled!==false&&dot(a)==="dot green").length} 可用`:"";
   if(!acc.length){g.innerHTML='<div class="empty">'+(key()?"没有账号 — 点右上角添加":"需要管理密钥 — 在下方输入后连接")+"</div>";return}
   for(const a of acc){
@@ -178,8 +178,8 @@ async function act(a,action,e,fromDrawer){
     if(action==="b"){await api("/account/bindings/clear",{method:"POST",body:JSON.stringify({id:a.id})})}
     if(action==="e"){await api("/account",{method:"PATCH",body:JSON.stringify({id:a.id,enabled:a.enabled===false})})}
     if(action==="x"){
-      if(e&&e.shiftKey){await api("/account?id="+encodeURIComponent(a.id)+"&purge=true",{method:"DELETE"})}
-      else{await api("/account?id="+encodeURIComponent(a.id),{method:"DELETE"})}
+      if(!confirm("删除账号 "+(a.label||a.id)+"？（宿主侧登录文件由 CPA 管理，不会删除）"))return;
+      await api("/account?id="+encodeURIComponent(a.id)+"&purge=true",{method:"DELETE"});
       sel=null;$("#drawer").classList.remove("open")
     }
     await load()
