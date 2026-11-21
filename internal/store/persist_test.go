@@ -15,9 +15,10 @@ func TestLoadRebuildsBindingLRU(t *testing.T) {
 	now := time.Now()
 	s.EnsureAccount("a1")
 	s.EnsureAccount("a2")
+	// LastSeen 递增：同时间戳会让 Load 的 LRU 重建顺序不确定（CI 实测踩过）
 	s.Bind("s1", "a1", now)
-	s.Bind("s2", "a1", now)
-	s.Bind("s3", "a2", now)
+	s.Bind("s2", "a1", now.Add(time.Second))
+	s.Bind("s3", "a2", now.Add(2*time.Second))
 	if err := s.Flush(); err != nil {
 		t.Fatal(err)
 	}

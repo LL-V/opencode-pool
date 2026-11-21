@@ -467,7 +467,11 @@ func Load(path string) (*Store, error) {
 		}
 	}
 	sort.Slice(sids, func(i, j int) bool {
-		return st.Bindings[sids[i]].LastSeen.Before(st.Bindings[sids[j]].LastSeen)
+		a, b := st.Bindings[sids[i]].LastSeen, st.Bindings[sids[j]].LastSeen
+		if !a.Equal(b) {
+			return a.Before(b)
+		}
+		return sids[i] < sids[j]
 	})
 	return &Store{
 		st: st, inflight: map[string]int{}, dir: filepath.Dir(path),
