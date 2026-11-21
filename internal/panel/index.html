@@ -7,92 +7,96 @@
 <style>
 :root{
   color-scheme:light;
-  --canvas:#f5f4f1;--surface:#fff;--sunken:#f0efec;--line:#e6e5e0;--line-2:#cfcfc9;
-  --text:#15181b;--muted:#4e545b;--faint:#687078;
-  --ok:#1a6b3f;--ok-bg:#e6f3ec;--warn:#8f6212;--warn-bg:#f8f0dd;
-  --danger:#d03b3b;--danger-bg:#fbebe9;--info:#1c4f6e;--info-bg:#e8eff4;
-  --neutral:#5a5f66;--neutral-bg:#eceded;--accent:#2f6fed;--accent-bg:#eef3fe;
+  --canvas:#f6f5f2;--surface:#fff;--sunken:#f2f1ee;--line:#e7e6e1;--line-2:#d3d2cc;
+  --text:#16191c;--muted:#565c63;--faint:#7a8188;
+  --ok:#1a6b3f;--ok-bg:#e7f3ec;--warn:#8a5f12;--warn-bg:#f8f0de;
+  --danger:#c73a3a;--danger-bg:#fbeceb;--info:#1c4f6e;--info-bg:#e9eff5;
+  --neutral:#5c6167;--neutral-bg:#eeeef0;--accent:#2f6fed;--accent-bg:#eef3fe;
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   --sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
   --r-card:10px;--r-ctrl:7px;--r-badge:6px;
-  --shadow:0 1px 2px rgba(28,26,20,.05),0 8px 24px rgba(28,26,20,.06);
+  --shadow:0 1px 2px rgba(28,26,20,.04),0 4px 14px rgba(28,26,20,.05);
 }
 *{box-sizing:border-box;margin:0}
-body{background:var(--canvas);color:var(--text);font:13.5px/1.55 var(--sans);padding:26px clamp(14px,4vw,52px) 60px}
+body{background:var(--canvas);color:var(--text);font:13px/1.5 var(--sans);padding:24px clamp(14px,3.2vw,40px) 56px}
 b,.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
-/* ── 顶栏 ── */
-.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
-.top h1{font-size:17px;font-weight:650;letter-spacing:-.01em}
-.pills{display:flex;gap:6px;flex-wrap:wrap}
-.pill{display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-badge);padding:4px 10px;font-size:11.5px;color:var(--muted)}
-.pill b{font-size:15px;font-weight:650;color:var(--text)}
+/* 顶栏 */
+.top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.top h1{font-size:16px;font-weight:650;letter-spacing:-.01em}
+.pills{display:flex;gap:5px;flex-wrap:wrap}
+.pill{display:inline-flex;align-items:center;gap:5px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-badge);padding:3px 9px;font-size:11px;color:var(--muted)}
+.pill b{font-size:14px;font-weight:650;color:var(--text)}
 .pill b.ok{color:var(--ok)} .pill b.warn{color:var(--warn)} .pill b.danger{color:var(--danger)}
-#add{margin-left:auto;border:0;background:var(--accent);color:#fff;font:600 12.5px var(--sans);padding:8px 16px;border-radius:var(--r-ctrl);cursor:pointer}
+#add{margin-left:auto;border:0;background:var(--accent);color:#fff;font:600 12px var(--sans);padding:7px 14px;border-radius:var(--r-ctrl);cursor:pointer}
 #add:hover{filter:brightness(1.07)}
-/* ── 错误条 / 密钥条 ── */
-#err{display:none;background:var(--danger-bg);border:1px solid #f0cdc9;color:var(--danger);border-radius:var(--r-ctrl);padding:9px 14px;margin-bottom:14px;font-size:12.5px;white-space:pre-wrap}
-#keybar{display:none;position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;border-radius:10px;padding:10px 14px;gap:8px;align-items:center;box-shadow:0 8px 28px rgba(0,0,0,.25)}
+/* 错误 / 密钥条 */
+#err{display:none;background:var(--danger-bg);border:1px solid #f2d3d1;color:var(--danger);border-radius:var(--r-ctrl);padding:8px 12px;margin-bottom:12px;font-size:12px;white-space:pre-wrap}
+#keybar{display:none;position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#14171a;color:#fff;border-radius:10px;padding:9px 12px;gap:8px;align-items:center;box-shadow:0 8px 28px rgba(0,0,0,.25)}
 #keybar.show{display:flex}
-#keybar input{border:0;border-radius:6px;padding:7px 10px;font:12.5px var(--mono);width:250px}
-#keybar button{border:0;background:var(--accent);color:#fff;border-radius:6px;padding:7px 13px;font:600 12.5px var(--sans);cursor:pointer}
-/* ── 卡片网格 ── */
-#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(400px,100%),1fr));gap:12px;align-items:start}
-.acct{position:relative;background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--ok);border-radius:var(--r-card);box-shadow:var(--shadow);padding:13px 16px;transition:border-color 140ms}
+#keybar input{border:0;border-radius:6px;padding:6px 9px;font:12px var(--mono);width:240px}
+#keybar button{border:0;background:var(--accent);color:#fff;border-radius:6px;padding:6px 12px;font:600 12px var(--sans);cursor:pointer}
+/* 卡片网格——330px 起始，宽屏 4 列 */
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(330px,100%),1fr));gap:10px;align-items:start}
+.acct{position:relative;background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--ok);border-radius:var(--r-card);box-shadow:var(--shadow);padding:11px 13px 10px;transition:border-color 140ms;min-width:0}
 .acct[data-tone=warn]{border-left-color:var(--warn)}
 .acct[data-tone=danger]{border-left-color:var(--danger)}
 .acct[data-tone=neutral]{border-left-color:var(--neutral);box-shadow:none}
-.acct[data-tone=neutral] .quotas,.acct[data-tone=neutral] .foot{opacity:.72}
+.acct[data-tone=neutral] .quotas,.acct[data-tone=neutral] .stats{opacity:.7}
 .acct.sel{outline:2px solid var(--accent);outline-offset:1px}
-/* 头部 */
-.acct-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:26px}
-.acct-name{font:650 13.5px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:46%}
-.acct-key{font:11px var(--mono);color:var(--faint)}
-.badge{display:inline-flex;align-items:center;gap:5px;min-height:21px;padding:2px 8px;border-radius:var(--r-badge);font-size:11.5px;font-weight:600;background:var(--neutral-bg);color:var(--text);white-space:nowrap}
-.badge i{width:6px;height:6px;border-radius:50%;flex:none;background:currentColor}
+/* 头部两行：名称+操作 / key+徽章 */
+.h1row{display:flex;align-items:center;gap:6px;min-width:0}
+.acct-name{font:650 12.5px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.acts{display:flex;gap:1px;flex:none}
+.acts button{border:0;background:none;color:var(--faint);font:11px var(--sans);cursor:pointer;padding:3px 6px;border-radius:5px;white-space:nowrap}
+.acts button:hover{background:var(--sunken);color:var(--accent)}
+.acts button.del:hover{color:var(--danger)}
+.h2row{display:flex;align-items:center;gap:8px;margin-top:4px;min-width:0}
+.acct-key{font:10.5px var(--mono);color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.badge{display:inline-flex;align-items:center;gap:5px;flex:none;min-height:20px;padding:1px 7px;border-radius:var(--r-badge);font-size:10.5px;font-weight:600;background:var(--neutral-bg);color:var(--text);white-space:nowrap}
+.badge i{width:5px;height:5px;border-radius:50%;flex:none;background:currentColor}
 .badge.ok{background:var(--ok-bg);color:var(--ok)}
 .badge.warn{background:var(--warn-bg);color:var(--warn)}
 .badge.danger{background:var(--danger-bg);color:var(--danger)}
 .badge.info{background:var(--info-bg);color:var(--info)}
-.acts{margin-left:auto;display:flex;gap:2px}
-.acts button{border:0;background:none;color:var(--faint);font:11.5px var(--sans);cursor:pointer;padding:4px 8px;border-radius:5px}
-.acts button:hover{background:var(--sunken);color:var(--accent)}
-.acts button.del:hover{color:var(--danger)}
-/* 额度行 */
-.quotas{display:flex;flex-direction:column;gap:7px;margin-top:11px}
-.q{position:relative;min-height:32px;border-radius:6px;background:var(--sunken);padding:6px 11px 10px 14px;display:flex;justify-content:space-between;align-items:center;gap:12px;overflow:hidden}
+/* 额度行 30px 固定 */
+.quotas{display:flex;flex-direction:column;gap:5px;margin-top:10px}
+.q{position:relative;height:30px;border-radius:5px;background:var(--sunken);padding:0 9px 0 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;overflow:hidden}
 .q::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--q-accent,#c9cdd2)}
 .q .fill{position:absolute;left:0;bottom:0;height:3px;background:var(--q-accent,#c9cdd2);transition:width 140ms ease}
-.q-name{font-size:11.5px;font-weight:600;color:var(--muted);position:relative}
-.q-meta{position:relative;font-size:11.5px;color:var(--muted);display:flex;gap:6px;align-items:baseline;white-space:nowrap}
-.q-meta b{font-size:12.5px;font-weight:650;color:var(--text)}
+.q-name{font-size:11px;font-weight:600;color:var(--muted);position:relative;white-space:nowrap}
+.q-meta{position:relative;font-size:10.5px;color:var(--muted);display:flex;gap:5px;align-items:baseline;white-space:nowrap}
+.q-meta b{font-size:11.5px;font-weight:650;color:var(--text)}
 .q[data-tone=ok]{--q-accent:var(--ok)} .q[data-tone=warn]{--q-accent:var(--warn)} .q[data-tone=danger]{--q-accent:var(--danger)}
 .q[data-tone=danger] .q-meta{color:var(--danger)}
-.q.empty .q-meta b{color:var(--faint);font-weight:500}
-/* 底部 */
-.foot{display:flex;flex-wrap:wrap;gap:5px 14px;margin-top:11px;font-size:11.5px;color:var(--muted)}
-.foot b{font-weight:650;color:var(--text)}
+.q.na .q-meta{color:var(--faint)} .q.na .q-meta b{font-weight:500;color:var(--faint)}
+/* 统计 2×2 */
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
+.stat{display:flex;align-items:baseline;justify-content:space-between;gap:6px;min-width:0}
+.stat span{font-size:10.5px;color:var(--faint);white-space:nowrap}
+.stat b{font-size:11.5px;font-weight:650;font-variant-numeric:tabular-nums}
 /* 展开 */
-details.more{margin-top:10px}
-details.more summary{cursor:pointer;font-size:11.5px;color:var(--faint);list-style:none;user-select:none}
+details.more{margin-top:7px}
+details.more summary{cursor:pointer;font-size:10.5px;color:var(--faint);list-style:none;user-select:none}
 details.more summary::before{content:"▸ "} details.more[open] summary::before{content:"▾ "}
-.more-box{background:var(--sunken);border-radius:6px;padding:10px 12px;margin-top:6px}
-.more-box dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 12px}
-.more-box dt{font-size:10.5px;color:var(--faint)}
-.more-box dd{font:11.5px var(--mono);font-variant-numeric:tabular-nums;word-break:break-all}
-/* 空态 */
-.empty{grid-column:1/-1;text-align:center;padding:60px 0;color:var(--muted)}
-.empty h2{font-size:14.5px;font-weight:600;color:var(--text);margin-bottom:4px}
+.more-box{background:var(--sunken);border-radius:5px;padding:8px 10px;margin-top:5px}
+.more-box dl{display:grid;grid-template-columns:1fr 1fr;gap:5px 10px}
+.more-box dt{font-size:9.5px;color:var(--faint)}
+.more-box dd{font:10.5px var(--mono);font-variant-numeric:tabular-nums;word-break:break-all;margin-top:1px}
+/* 整页空态（类名独立，避免与额度行冲突） */
+.grid-empty{grid-column:1/-1;text-align:center;padding:56px 0;color:var(--muted)}
+.grid-empty h2{font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px}
+.grid-empty div{font-size:12px}
 /* 模态框 */
-#modal{position:fixed;inset:0;background:rgba(21,24,27,.34);display:none;align-items:center;justify-content:center;z-index:10}
+#modal{position:fixed;inset:0;background:rgba(22,25,28,.34);display:none;align-items:center;justify-content:center;z-index:10}
 #modal.open{display:flex}
-#modal .box{background:var(--surface);border-radius:12px;padding:22px;width:390px;max-width:92vw;box-shadow:var(--shadow)}
-#modal h3{font-size:14.5px;font-weight:650;margin-bottom:6px}
-#modal p{font-size:11.5px;color:var(--muted);margin-bottom:8px}
-#modal label{display:block;font-size:11.5px;color:var(--muted);margin:12px 0 5px}
-#modal input{width:100%;border:1px solid var(--line-2);border-radius:var(--r-ctrl);padding:9px 11px;font:12.5px var(--mono);background:var(--surface)}
+#modal .box{background:var(--surface);border-radius:12px;padding:20px;width:372px;max-width:92vw;box-shadow:var(--shadow)}
+#modal h3{font-size:14px;font-weight:650;margin-bottom:4px}
+#modal p{font-size:11px;color:var(--muted);margin-bottom:6px}
+#modal label{display:block;font-size:11px;color:var(--muted);margin:11px 0 4px}
+#modal input{width:100%;border:1px solid var(--line-2);border-radius:var(--r-ctrl);padding:8px 10px;font:12px var(--mono);background:var(--surface)}
 #modal input:focus{outline:2px solid var(--accent-bg);border-color:var(--accent)}
-#modal .row{display:flex;gap:8px;margin-top:18px}
-#modal .row button{flex:1;border-radius:var(--r-ctrl);padding:9px;font:600 12.5px var(--sans);cursor:pointer}
+#modal .row{display:flex;gap:8px;margin-top:16px}
+#modal .row button{flex:1;border-radius:var(--r-ctrl);padding:8px;font:600 12px var(--sans);cursor:pointer}
 #mok{border:0;background:var(--accent);color:#fff}#mca{border:1px solid var(--line-2);background:var(--surface)}
 </style>
 </head>
@@ -116,6 +120,7 @@ details.more summary::before{content:"▸ "} details.more[open] summary::before{
 const API="/v0/management/plugins/opencode-pool";
 const $=s=>document.querySelector(s);
 let sel=null,timer=null,data={accounts:[]};
+let lastJson="",lastRenderAt=0;const openIds=new Set();
 const key=()=>{if(localStorage.ocp_key)return localStorage.ocp_key;
   try{const a=JSON.parse(localStorage.getItem("cli-proxy-auth")||"");const k=a&&a.state&&a.state.managementKey;if(typeof k==="string"&&k)return k}catch(_){}return""};
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -130,7 +135,6 @@ async function api(p,o={}){
     showErr("请求失败 "+r.status+"  "+p+"\n"+m);throw r}
   showErr("");return JSON.parse(t)
 }
-/* ── 状态推导 ── */
 function state(a){
   const w=a.windows||[],now=Date.now();
   if(a.requires_sign_in)return{k:"danger",t:"需重新登录"};
@@ -143,28 +147,30 @@ function state(a){
 }
 function rel(iso){if(!iso)return"—";const m=(new Date(iso)-Date.now())/6e4;
   if(m<=0)return"即将重置";if(m<60)return Math.ceil(m)+"m";if(m<1440)return(m/60).toFixed(1)+"h";return(m/1440).toFixed(1)+"d"}
-function ago(iso){if(!iso)return"—";const s=(Date.now()-new Date(iso))/1e3;
-  if(s<60)return Math.round(s)+"s 前";if(s<3600)return Math.round(s/60)+"m 前";if(s<86400)return Math.round(s/3600)+"h 前";return Math.round(s/86400)+"d 前"}
 const SLOTS=[["rolling","5 小时"],["weekly","周限额"],["monthly","月限额"]];
 function quotaRows(a){
   const m={};(a.windows||[]).forEach(w=>m[w.window]=w);
   return SLOTS.map(([k,name])=>{
     const w=m[k];
     if(!w||w.used_pct==null)
-      return`<div class="q empty" title="尚未获取用量数据"><span class="q-name">${name}</span><span class="q-meta"><b>—</b><span>读取中</span></span></div>`;
+      return`<div class="q na" title="尚未获取用量数据"><span class="q-name">${name}</span><span class="q-meta"><b>—</b><span>读取中</span></span></div>`;
     const left=Math.max(0,100-w.used_pct),used=Math.min(w.used_pct,100);
     const blocked=w.used_pct>=100&&new Date(w.until)>new Date();
-    const tone=blocked?"danger":left<30?"warn":left<=70?"warn":"ok";
+    const tone=blocked?"danger":left<30?"danger":left<=70?"warn":"ok";
     const meta=blocked
-      ?`<span>阻断至重置（${rel(w.until)}）</span>`
-      :`<b>剩余 ${Math.round(left)}%</b><span>重置 ${rel(w.until)}</span>`;
+      ?`<span>阻断 · ${rel(w.until)} 后重置</span>`
+      :`<b>剩余 ${Math.round(left)}%</b><span>${rel(w.until)} 后重置</span>`;
+    /* 填充线=剩余（满绿=安全，短红=危险） */
     return`<div class="q" data-tone="${tone}" title="已用 ${w.used_pct.toFixed(1)}% · 重置 ${w.until?new Date(w.until).toLocaleString():"—"} · 来源 ${esc(w.source||"")}">
       <span class="q-name">${name}</span><span class="q-meta">${meta}</span>
-      <span class="fill" style="width:${used}%"></span></div>`
+      <span class="fill" style="width:${left}%"></span></div>`
   }).join("")
 }
 function render(){
-  const g=$("#grid");g.innerHTML="";
+  const g=$("#grid");
+  // 保留用户已展开的详情（整表重建会折叠 details）
+  g.querySelectorAll(".acct").forEach(c=>{const d=c.querySelector("details.more");if(d&&d.open)openIds.add(c.dataset.id)});
+  g.innerHTML="";
   const acc=[...(data.accounts||[])].sort((a,b)=>(a.label||a.id).localeCompare(b.label||b.id)||a.id.localeCompare(b.id));
   const cnt={ok:0,warn:0,danger:0,off:0};
   acc.forEach(a=>{const s=state(a);if(s.k==="ok")cnt.ok++;else if(s.k==="neutral")cnt.off++;else if(s.k==="danger")cnt.danger++;else cnt.warn++});
@@ -173,35 +179,36 @@ function render(){
     ${cnt.warn?`<span class="pill"><b class="warn">${cnt.warn}</b> 受限</span>`:""}
     ${cnt.danger?`<span class="pill"><b class="danger">${cnt.danger}</b> 异常</span>`:""}
     ${cnt.off?`<span class="pill"><b>${cnt.off}</b> 停用</span>`:""}`;
-  if(!acc.length){g.innerHTML=`<div class="empty"><h2>${key()?"还没有账号":"需要管理密钥"}</h2><div>${key()?"添加账号后即可开始路由请求":"在下方输入 CPAMP 管理密钥后连接"}</div></div>`;return}
+  if(!acc.length){g.innerHTML=`<div class="grid-empty"><h2>${key()?"还没有账号":"需要管理密钥"}</h2><div>${key()?"添加账号后即可开始路由请求":"在下方输入 CPAMP 管理密钥后连接"}</div></div>`;return}
   for(const a of acc){
     const s=state(a),tone=s.k==="neutral"?"neutral":s.k;
     const el=document.createElement("article");
     el.className="acct"+(sel===a.id?" sel":"");el.dataset.id=a.id;el.dataset.tone=tone;el.tabIndex=0;
     const u=a.usage||{};
     el.innerHTML=`
-    <header class="acct-top">
+    <div class="h1row">
       <span class="acct-name" title="${esc(a.label||a.id)}">${esc(a.label||a.id)}</span>
-      <span class="acct-key">${esc(a.api_key_masked||"")}</span>
-      <span class="badge ${s.k}"><i></i>${s.t}</span>
       <span class="acts">
         <button data-a="e" title="${a.enabled===false?"启用":"停用"}">${a.enabled===false?"启用":"停用"}</button>
         <button data-a="u" title="解除阻断/恢复">恢复</button>
         <button data-a="x" class="del" title="删除">删除</button>
       </span>
-    </header>
-    <div class="quotas">${quotaRows(a)}</div>
-    <div class="foot">
-      <span>请求 <b>${fmt(u.requests)}</b></span>
-      <span>输入 <b>${fmt(u.input_tokens)}</b> tok</span>
-      <span>输出 <b>${fmt(u.output_tokens)}</b> tok</span>
-      <span>并发 <b>${a.inflight??0}</b><span style="color:var(--faint)">/${a.learned_concurrency_limit||"–"}</span></span>
-      ${u.last_used_at?`<span>最近使用 ${ago(u.last_used_at)}</span>`:""}
     </div>
-    <details class="more"><summary>详细信息</summary><div class="more-box"><dl>
+    <div class="h2row">
+      <span class="acct-key">${esc(a.api_key_masked||"")}</span>
+      <span class="badge ${s.k}"><i></i>${s.t}</span>
+    </div>
+    <div class="quotas">${quotaRows(a)}</div>
+    <div class="stats">
+      <div class="stat"><span>请求</span><b>${fmt(u.requests)}</b></div>
+      <div class="stat"><span>并发</span><b>${a.inflight??0}<span style="color:var(--faint);font-weight:400">/${a.learned_concurrency_limit||"–"}</span></b></div>
+      <div class="stat"><span>输入 tok</span><b>${fmt(u.input_tokens)}</b></div>
+      <div class="stat"><span>输出 tok</span><b>${fmt(u.output_tokens)}</b></div>
+    </div>
+    <details class="more"${openIds.has(a.id)?" open":""}><summary>详细信息</summary><div class="more-box"><dl>
       <div><dt>账号 ID</dt><dd>${esc(a.id)}</dd></div>
       <div><dt>会话绑定</dt><dd>${a.bindings_count??0}</dd></div>
-      <div><dt>状态</dt><dd>${esc(a.status)}</dd></div>
+      <div><dt>最近使用</dt><dd>${u.last_used_at?ago(u.last_used_at):"—"}</dd></div>
       <div><dt>最近错误</dt><dd>${a.last_error?esc(a.last_error.code)+" · "+ago(a.last_error.at):"—"}</dd></div>
       <div><dt>并发上限</dt><dd>${a.learned_concurrency_limit||"未学习"}</dd></div>
       <div><dt>待验证</dt><dd>${a.verify_pending?"是":"否"}</dd></div>
@@ -209,9 +216,13 @@ function render(){
     el.onclick=e=>{const b=e.target.closest("button");
       if(b){act(a,b.dataset.a,e);e.stopPropagation();return}
       sel=sel===a.id?null:a.id;render()};
+    const det=el.querySelector("details.more");
+    det.ontoggle=()=>{det.open?openIds.add(a.id):openIds.delete(a.id)};
     g.appendChild(el)
   }
 }
+function ago(iso){if(!iso)return"—";const s=(Date.now()-new Date(iso))/1e3;
+  if(s<60)return Math.round(s)+"s 前";if(s<3600)return Math.round(s/60)+"m 前";if(s<86400)return Math.round(s/3600)+"h 前";return Math.round(s/86400)+"d 前"}
 async function act(a,action,e){
   e&&e.stopPropagation();
   try{
@@ -225,7 +236,15 @@ async function act(a,action,e){
     await load()
   }catch(_){}
 }
-async function load(){try{data=await api("/accounts")}catch(_){}render()}
+async function load(){
+  try{
+    const d=await api("/accounts");
+    const j=JSON.stringify(d);
+    // 数据未变且距上次渲染不足 60s：跳过重建（防 5s 轮询闪烁/折叠/跳序）
+    if(j===lastJson&&Date.now()-lastRenderAt<60000)return;
+    lastJson=j;lastRenderAt=Date.now();data=d;render()
+  }catch(_){}
+}
 function loop(){if(timer)clearInterval(timer);load();timer=setInterval(load,5000)}
 $("#conn").onclick=()=>{localStorage.ocp_key=$("#key").value;$("#keybar").classList.remove("show");loop()};
 $("#add").onclick=()=>{$("#modal").classList.add("open");$("#mname").focus()};
@@ -246,7 +265,7 @@ document.onkeydown=e=>{
   if(e.key==="Escape"){sel=null;render();return}
   const n=e.key==="j"?(i<0?0:i+1):e.key==="k"?(i<0?0:i-1):i;
   if(e.key==="j"||e.key==="k"){const c=cards[Math.min(Math.max(n,0),cards.length-1)];sel=c.dataset.id;render();
-    c.scrollIntoView({block:"nearest"});e.preventDefault();return}
+    document.querySelector('.acct[data-id="'+CSS.escape(sel)+'"]')?.scrollIntoView({block:"nearest"});e.preventDefault();return}
   if(i>=0){const a=data.accounts.find(x=>x.id===cards[i].dataset.id);if(!a)return;
     if(e.key==="e")act(a,"e");if(e.key==="u")act(a,"u");if(e.key==="x")act(a,"x")}
 };
