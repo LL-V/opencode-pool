@@ -1,0 +1,73 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  PLUGIN_ID: opencode-pool
+
+jobs:
+  build:
+    name: build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # CPA 官方分发是 Linux（Docker amd64+arm64），Linux 是主战场。
+          - { goos: linux,  goarch: amd64, runner: ubuntu-latest }
+          - { goos: linux,  goarch: arm64, runner: ubuntu-24.04-arm }
+          - { goos: darwin, goarch: amd64, runner: macos-13 }
+          - { goos: darwin, goarch: arm64, runner: macos-latest }
+          - { goos: windows, goarch: amd64, runner: windows-latest }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: go test -race ./...
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '1'
+        shell: bash
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          ext="so"; case "$GOOS" in darwin) ext="dylib";; windows) ext="dll";; esac
+          # zip 根放版本化动态库（pluginstore/install.go:319-340 约定）
+          go build -buildmode=c-shared -o "opencode-pool-v${ver}.${ext}" ./cmd/opencodepool
+          # 资产命名 <id>_<version>_<goos>_<goarch>.zip（pluginstore/github.go:351）
+          zip "opencode-pool_${ver}_${GOOS}_${GOARCH}.zip" "opencode-pool-v${ver}.${ext}"
+          sha256sum "opencode-pool_${ver}_${GOOS}_${GOARCH}.zip" >> checksums.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifact-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            opencode-pool_*.zip
+            checksums.txt
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Merge checksums
+        run: sort -u dist/checksums.txt -o dist/checksums.txt 2>/dev/null || cat dist/checksums.txt | sort -u > dist/checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/checksums.txt
+          generate_release_notes: true

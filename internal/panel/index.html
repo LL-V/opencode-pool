@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenCode</title>
+<style>
+:root{
+  --bg:#ffffff;--fg:#18181b;--muted:#71717a;--line:#e5e5e5;
+  --hover:#f4f4f5;--accent:#5e6ad2;--accent-ink:#ffffff;
+  --green:#22c55e;--red:#ef4444;--orange:#f59e0b;--yellow:#eab308;--gray:#a1a1aa;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+main{max-width:860px;margin:0 auto;padding:48px 24px}
+h1{font-size:13px;font-weight:600;color:var(--muted);letter-spacing:.08em;margin-bottom:16px}
+table{width:100%;border-collapse:collapse}
+th{font-weight:500;color:var(--muted);text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);font-size:12px}
+td{padding:9px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+tr.row{cursor:pointer}
+tr.row:hover,tr.row.sel{background:var(--hover)}
+td.num,th.num{text-align:right;font-family:var(--mono);font-size:12px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:2px;vertical-align:middle}
+.dot.green{background:var(--green)}.dot.red{background:var(--red)}.dot.orange{background:var(--orange)}
+.dot.yellow{background:var(--yellow)}.dot.gray{background:var(--gray)}
+.dot.hollow{background:transparent;border:2px solid var(--red)}
+.bar{display:inline-block;width:72px;height:4px;background:var(--line);border-radius:2px;overflow:hidden;vertical-align:middle;margin-right:8px}
+.bar>i{display:block;height:100%;border-radius:2px}
+.actions{opacity:0;white-space:nowrap}
+tr.row:hover .actions,tr.row.sel .actions,.actions:focus-within{opacity:1}
+.actions button{border:0;background:none;color:var(--muted);font:inherit;cursor:pointer;padding:2px 6px;border-radius:4px}
+.actions button:hover{background:var(--hover);color:var(--fg)}
+.actions button.danger:hover{color:var(--red)}
+.add{border:0;background:none;color:var(--accent);font:inherit;cursor:pointer;padding:9px 8px}
+.empty{padding:32px 8px;color:var(--muted)}
+.skel td{color:transparent;background:linear-gradient(90deg,var(--hover),var(--line),var(--hover));background-size:200% 100%;animation:s 1s linear infinite;border-radius:4px}
+@keyframes s{to{background-position:-200% 0}}
+aside{position:fixed;top:0;right:-420px;width:400px;height:100%;background:var(--bg);border-left:1px solid var(--line);padding:24px;transition:right .15s ease;overflow:auto}
+aside.open{right:0}
+aside h2{font-size:14px;font-weight:600;margin-bottom:16px}
+aside dl{display:grid;grid-template-columns:96px 1fr;row-gap:8px;font-size:12px}
+aside dt{color:var(--muted)}aside dd{font-family:var(--mono)}
+aside .acts{margin-top:20px;display:flex;gap:8px}
+aside .acts button{flex:1;border:1px solid var(--line);background:var(--bg);font:inherit;padding:6px;border-radius:6px;cursor:pointer}
+aside .acts button:hover{border-color:var(--accent);color:var(--accent)}
+.keybar{display:none;gap:8px;margin-bottom:16px}
+.keybar.show{display:flex}
+.keybar input{flex:1;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:12px var(--mono)}
+.keybar button{border:0;background:var(--accent);color:var(--accent-ink);border-radius:6px;padding:6px 14px;font:inherit;cursor:pointer}
+.dash{color:var(--muted)}
+#confirm{position:fixed;inset:0;background:rgba(24,24,27,.3);display:none;align-items:center;justify-content:center}
+#confirm.show{display:flex}
+#confirm>div{background:var(--bg);border-radius:10px;padding:20px;width:280px}
+#confirm button{width:100%;border:0;border-radius:6px;padding:8px;font:inherit;cursor:pointer;margin-top:8px}
+#confirm .c{background:var(--hover)}#confirm .d{background:var(--red);color:#fff}
+</style>
+</head>
+<body>
+<main>
+  <h1>OPENCODE</h1>
+  <div class="keybar" id="keybar">
+    <input id="key" type="password" spellcheck="false">
+    <button id="connect">连接</button>
+  </div>
+  <table><thead><tr><th></th><th>账号</th><th class="num">用量</th><th class="num">并发</th><th></th></tr></thead>
+  <tbody id="rows"></tbody></table>
+  <button class="add" id="add">＋ 账号</button>
+</main>
+<aside id="drawer"><div id="detail"></div></aside>
+<div id="confirm"><div>
+  <button class="c" id="c1">永久删除</button>
+  <button class="d" id="c2">永久删除</button>
+</div></div>
+<script>
+"use strict";
+const $=s=>document.querySelector(s), API=location.pathname.replace(/\/status.*$/,"");
+let sel=null,t=null,data={accounts:[]};
+const key=()=>localStorage.ocp_key||"";
+async function api(path,opt={}){
+  const r=await fetch(API+path,{...opt,headers:{...opt.headers,"X-Management-Key":key(),"Content-Type":"application/json"}});
+  if(r.status===401){$("#keybar").classList.add("show");throw 0}
+  if(!r.ok)throw r;
+  return r.json();
+}
+function dot(a){
+  const w=a.windows||[],ex=w.some(x=>x.used_pct>=100&&new Date(x.until)>new Date());
+  if(a.requires_sign_in)return"dot hollow";
+  if(ex)return"dot red";
+  if(w.some(x=>x.used_pct>=92))return"dot orange";
+  if(a.verify_pending)return"dot yellow";
+  if(a.enabled===false)return"dot gray";
+  return"dot green";
+}
+function worst(a){const w=a.windows||[];return w.length?w.reduce((m,x)=>x.used_pct>(m?m.used_pct:-1)?x:m,null):null}
+function until(x){if(!x||x.used_pct<100)return"";const m=(new Date(x.until)-Date.now())/6e4;
+  return m<=0?"—":m<60?Math.ceil(m)+"m":Math.floor(m/60)+"h"+Math.ceil(m%60)+"m"}
+function barColor(p){return p>=100?"var(--red)":p>=92?"var(--orange)":"var(--accent)"}
+function render(){
+  const tb=$("#rows");tb.innerHTML="";
+  if(!data.accounts.length&&$("#keybar").classList.contains("show")===false&&key()===""){
+    tb.innerHTML='<tr><td colspan="5" class="empty">没有账号</td></tr>';return;
+  }
+  for(const a of data.accounts){
+    const w=worst(a),p=w?Math.min(w.used_pct,100):null;
+    const tr=document.createElement("tr");tr.className="row"+(sel===a.id?" sel":"");
+    tr.dataset.id=a.id;
+    tr.innerHTML=`<td><span class="${dot(a)}"></span></td>
+      <td>${esc(a.label||a.id)}</td>
+      <td class="num">${p===null?'<span class="dash">—</span>':`<span class="bar"><i style="width:${p}%;background:${barColor(p)}"></i></span>${until(w)||p.toFixed(0)+"%"}`}</td>
+      <td class="num">${a.inflight??0}/${a.learned_concurrency_limit||"–"}</td>
+      <td class="actions"><button data-a="r">刷新</button><button data-a="u">恢复</button><button data-a="e">${a.enabled===false?"启用":"停用"}</button><button data-a="x" class="danger">删除</button></td>`;
+    tr.onclick=e=>{const b=e.target.closest("button");
+      if(b){act(a,b.dataset.a,e);e.stopPropagation();return}
+      sel=sel===a.id?null:a.id;render();sel&&drawer(a)};
+    tb.appendChild(tr);
+  }
+}
+async function drawer(a){
+  const d=$("#detail");$("#drawer").classList.add("open");
+  let full=a;try{full=await api("/account?id="+encodeURIComponent(a.id))}catch(e){}
+  const ws=(full.windows||[]).map(w=>`<dt>${esc(w.window)}</dt><dd>${w.used_pct==null?"—":w.used_pct.toFixed(0)+"% · "+until(w)+" · "+w.source}</dd>`).join("");
+  d.innerHTML=`<h2>${esc(full.label||full.id)}</h2>
+  <dl>${ws}
+    <dt>请求</dt><dd>${(full.usage&&full.usage.requests)??0}</dd>
+    <dt>输入</dt><dd>${fmt(full.usage&&full.usage.input_tokens)}</dd>
+    <dt>输出</dt><dd>${fmt(full.usage&&full.usage.output_tokens)}</dd>
+    <dt>绑定</dt><dd>${full.bindings_count??0}</dd>
+    <dt>最近错误</dt><dd>${full.last_error?full.last_error.code+" · "+new Date(full.last_error.at).toLocaleString():"—"}</dd>
+  </dl>
+  <div class="acts"><button data-a="r">刷新</button><button data-a="u">恢复</button><button data-a="b">解绑</button><button data-a="x" class="danger">删除</button></div>`;
+  d.querySelectorAll("button").forEach(b=>b.onclick=e=>act(full,b.dataset.a,e,true));
+}
+const fmt=n=>n==null?"—":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(1)+"k":n;
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+async function act(a,action,e,fromDrawer){
+  e&&e.stopPropagation();
+  const id=encodeURIComponent(a.id);
+  try{
+    if(action==="r")await api("/account/refresh",{method:"POST",body:JSON.stringify({id:a.id})});
+    if(action==="u")await api("/account/unblock",{method:"POST",body:JSON.stringify({id:a.id})});
+    if(action==="b")await api("/account/bindings/clear",{method:"POST",body:JSON.stringify({id:a.id})});
+    if(action==="e")await api("/account",{method:"PATCH",body:JSON.stringify({id:a.id,enabled:a.enabled===false})});
+    if(action==="x"){
+      if(e&&e.shiftKey){await api("/account?id="+id+"&purge=true",{method:"DELETE"});sel=null;$("#drawer").classList.remove("open")}
+      else{await api("/account?id="+id,{method:"DELETE"});sel=null;$("#drawer").classList.remove("open")}
+    }
+    await load();
+  }catch(r){if(r&&r.status===409)await load()}
+}
+async function load(){try{data=await api("/accounts")}catch(e){}render()}
+async function loop(){if(t)clearInterval(t);await load();t=setInterval(load,5000)}
+$("#connect").onclick=()=>{localStorage.ocp_key=$("#key").value;$("#keybar").classList.remove("show");loop()};
+document.onkeydown=e=>{
+  if(e.target.tagName==="INPUT")return;
+  const rows=[...document.querySelectorAll("tr.row")];if(!rows.length)return;
+  const i=rows.findIndex(r=>r.classList.contains("sel"));
+  const n=e.key==="j"?(i<0?0:i+1):e.key==="k"?(i<0?0:i-1):i;
+  if(e.key==="j"||e.key==="k"){rows[Math.min(Math.max(n,0),rows.length-1)].click();e.preventDefault()}
+  if(i>=0){const a=data.accounts.find(x=>x.id===rows[i].dataset.id);if(!a)return;
+    if(e.key==="e")act(a,"e");if(e.key==="r")act(a,"r");if(e.key==="u")act(a,"u");
+    if(e.key==="x")act(a,"x");if(e.key==="Enter")rows[i].click()}
+};
+$("#add").onclick=async()=>{
+  const n=prompt("账户名（邮箱）");if(n===null)return;
+  const k=prompt("api_key");if(!k)return;
+  try{await api("/accounts",{method:"POST",body:JSON.stringify({name:n.trim(),api_key:k})});await load()}catch(r){}
+};
+loop();
+</script>
+</body>
+</html>

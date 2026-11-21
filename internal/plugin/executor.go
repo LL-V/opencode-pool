@@ -1,0 +1,274 @@
+package plugin
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"cpa-plugin-opencode-pool/internal/classifier"
+	"cpa-plugin-opencode-pool/internal/session"
+	"cpa-plugin-opencode-pool/internal/upstream"
+
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
+)
+
+// hostErrPayload mirrors the pluginabi error protocol fields the executor
+// returns (dispatch serializes it into the envelope Error).
+type hostErrPayload struct {
+	Code              string `json:"code"`
+	Message           string `json:"message"`
+	HTTPStatus        int    `json:"http_status,omitempty"`
+	RetryAfterSeconds int    `json:"retry_after_seconds,omitempty"`
+	CredentialScoped  bool   `json:"credential_scoped,omitempty"`
+}
+
+// storage is the plugin-owned auth payload persisted inside auth files.
+type storage struct {
+	Type    string `json:"type"`
+	Name    string `json:"name,omitempty"` // 账户名（邮箱）
+	APIKey  string `json:"api_key,omitempty"`
+	BaseURL string `json:"base_url,omitempty"`
+	Label   string `json:"label,omitempty"`
+}
+
+func parseStorage(raw []byte) storage {
+	var s storage
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &s)
+	}
+	return s
+}
+
+// resolveSession finds the conversation id, preferring already-injected
+// headers (BeforeAuth ran first), then body fields, then derivation.
+func (p *Plugin) resolveSession(hdrs http.Header, body []byte) string {
+	return session.Resolve(hdrs, body)
+}
+
+// endpointFor maps the negotiated format onto the upstream path.
+func endpointFor(format string) string {
+	switch format {
+	case "claude":
+		return "messages"
+	case "openai-response":
+		return "responses"
+	default:
+		return "chat/completions"
+	}
+}
+
+// applyOutboundHeaders rewrites User-Agent (delete all case variants, then
+// set) and guarantees x-opencode-session presence.
+func (p *Plugin) applyOutboundHeaders(hdrs http.Header, body []byte) http.Header {
+	out := http.Header{}
+	for k, v := range hdrs {
+		// 凭据类头一律重建：客户端的 Authorization/x-api-key 不得透传上游
+		// （会绕过账号池鉴权或携带外币凭据）。
+		if equalFold(k, "User-Agent") || equalFold(k, "x-opencode-session") ||
+			equalFold(k, "Authorization") || equalFold(k, "x-api-key") {
+			continue
+		}
+		out[k] = v
+	}
+	out.Set("User-Agent", p.config().UpstreamUserAgent)
+	if sid := session.Resolve(hdrs, body); sid != "" {
+		out.Set("X-Opencode-Session", sid)
+	}
+	return out
+}
+
+// classifyUpstream applies store effects and returns the host error payload
+// for non-2xx statuses (nil for 2xx).
+func (p *Plugin) classifyUpstream(authID string, status int, body []byte, hdrs http.Header) *hostErrPayload {
+	res := classifier.Classify(status, body, hdrs)
+	switch res.Category {
+	case classifier.CategoryNone:
+		return nil
+	case classifier.CategoryConcurrency:
+		p.store.LearnLimit(authID, res.Limit)
+	case classifier.CategoryQuota:
+		p.store.ObserveWindowSource(authID, res.Window, "429", 100, res.ResetAt, time.Now())
+	case classifier.CategoryAuthInvalid:
+		// host refresh path owns the retry; only mark on repeated terminal 401
+		// (host condemns after its own refresh attempt).
+	case classifier.CategoryWAFBlock:
+	case classifier.CategoryAuthSuspect:
+		p.store.SetVerifyPending(authID, true)
+	}
+	if res.Category == classifier.CategoryNone {
+		// 未分类的非 2xx（404/422/418…）不得伪装成功信封透传下游
+		// （deep-check：级联 404 会当 200 payload 返回）。
+		return &hostErrPayload{Code: "upstream_error", Message: "upstream rejected request", HTTPStatus: status}
+	}
+	he := res.HostError()
+	return &hostErrPayload{
+		Code: he.Code, Message: he.Message, HTTPStatus: he.HTTPStatus,
+		RetryAfterSeconds: he.RetryAfterSeconds, CredentialScoped: he.CredentialScoped,
+	}
+}
+
+// execute serves executor.execute / execute_stream / count_tokens.
+func (p *Plugin) execute(request []byte, stream bool) ([]byte, error) {
+	// host 调 execute_stream 时用 rpcExecutorRequest 包装：
+	// ExecutorRequest + stream_id + host_callback_id（rpc_schema.go:100-104）。
+	var req struct {
+		pluginapi.ExecutorRequest
+		StreamID       string `json:"stream_id,omitempty"`
+		HostCallbackID string `json:"host_callback_id,omitempty"`
+	}
+	if err := json.Unmarshal(request, &req); err != nil {
+		return nil, err
+	}
+	if p.bridge == nil {
+		return errEnvelopeHostBytes(pluginabi.Error{Code: "not_ready", Message: "host bridge unavailable", HTTPStatus: 500}), nil
+	}
+	st := parseStorage(req.StorageJSON)
+	if st.APIKey == "" {
+		return errEnvelopeHostBytes(pluginabi.Error{Code: "request_scoped", Message: "account has no api_key", HTTPStatus: 400}), nil
+	}
+	authID := req.AuthID
+	p.store.EnsureAccount(authID)
+	p.store.InflightInc(authID)
+
+	hdrs := p.applyOutboundHeaders(req.Headers, req.Payload)
+	hdrs.Set("Authorization", "Bearer "+st.APIKey)
+	url := upstream.Join(st.BaseURL, endpointFor(req.Format))
+
+	ctx := context.Background()
+	if stream {
+		return p.executeStream(ctx, authID, url, hdrs, req.Payload, req.StreamID, req.HostCallbackID)
+	}
+
+	resp, err := p.bridge.Do(ctx, pluginapi.HTTPRequest{Method: "POST", URL: url, Headers: hdrs, Body: req.Payload}, req.HostCallbackID)
+	if err != nil {
+		return errEnvelopeHostBytes(pluginabi.Error{Code: "transient_transport", Message: err.Error(), HTTPStatus: 502}), nil
+	}
+	if he := p.classifyUpstream(authID, resp.StatusCode, resp.Body, resp.Headers); he != nil {
+		return errEnvelopeHostBytes(pluginabi.Error{Code: he.Code, Message: he.Message, HTTPStatus: he.HTTPStatus, RetryAfterSeconds: he.RetryAfterSeconds, CredentialScoped: he.CredentialScoped}), nil
+	}
+	p.bindSession(authID, hdrs, req.Payload)
+	return okEnvelope(pluginapi.ExecutorResponse{Payload: resp.Body, Headers: resp.Headers})
+}
+
+// bindSession records session→auth affinity on upstream acceptance
+// (write-on-success). 无头客户端没有宿主 canonical session（usage.handle 的
+// SessionID 为空），executor 是它们唯一的绑定写入点；派生键 d- 稳定于首条
+// user 消息，b-（body 哈希）逐请求变化无亲和价值，跳过。
+func (p *Plugin) bindSession(authID string, hdrs http.Header, body []byte) {
+	if sid := session.Resolve(hdrs, body); sid != "" && !strings.HasPrefix(sid, "b-") {
+		p.store.Bind(sid, authID, time.Now())
+	}
+}
+
+// executeStream serves executor.execute_stream. pluginStreamID 非空时走
+// 异步模式（host 约定：RPC 响应 chunks 为空 = 插件稍后经 host.stream.emit
+// 推送、host.stream.close 收尾，rpc_client_stream.go:29-47）；否则退回
+// 同步数组模式（旧 host 兼容）。
+func (p *Plugin) executeStream(ctx context.Context, authID, url string, hdrs http.Header, body []byte, pluginStreamID, callbackID string) ([]byte, error) {
+	status, respHdrs, streamID, err := p.bridge.DoStream(ctx, pluginapi.HTTPRequest{Method: "POST", URL: url, Headers: hdrs, Body: body}, callbackID)
+	if err != nil {
+		return errEnvelopeHostBytes(pluginabi.Error{Code: "transient_transport", Message: err.Error(), HTTPStatus: 502}), nil
+	}
+	if status >= 300 {
+		// Non-2xx stream start: pull one chunk as the error body. 错误随 RPC
+		// 同步返回，host 走换号；host 侧插件流由 host cleanup 收尾。
+		payload, _, _, _ := p.bridge.StreamRead(streamID)
+		_ = p.bridge.StreamClose(streamID)
+		if he := p.classifyUpstream(authID, status, payload, respHdrs); he != nil {
+			return errEnvelopeHostBytes(pluginabi.Error{Code: he.Code, Message: he.Message, HTTPStatus: he.HTTPStatus, RetryAfterSeconds: he.RetryAfterSeconds, CredentialScoped: he.CredentialScoped}), nil
+		}
+		return errEnvelopeHostBytes(pluginabi.Error{Code: "upstream_error", Message: "upstream rejected stream", HTTPStatus: status}), nil
+	}
+	if pluginStreamID != "" {
+		// 异步模式：先返回 headers（chunks 为空），再后台泵流。
+		p.bindSession(authID, hdrs, body)
+		go p.pumpUpstreamStream(pluginStreamID, streamID)
+		return okEnvelope(map[string]any{"headers": respHdrs})
+	}
+	// 同步数组模式：读完所有 chunk 再一次性返回。
+	p.bindSession(authID, hdrs, body)
+	var chunks []pluginapi.ExecutorStreamChunk
+	for {
+		payload, errMsg, done, rerr := p.bridge.StreamRead(streamID)
+		if rerr != nil {
+			_ = p.bridge.StreamClose(streamID)
+			return errEnvelopeHostBytes(pluginabi.Error{Code: "transient_transport", Message: rerr.Error(), HTTPStatus: 502}), nil
+		}
+		if errMsg != "" {
+			_ = p.bridge.StreamClose(streamID)
+			chunks = append(chunks, pluginapi.ExecutorStreamChunk{Payload: payload, Err: errString(errMsg)})
+			break
+		}
+		if len(payload) > 0 {
+			cp := make([]byte, len(payload))
+			copy(cp, payload)
+			chunks = append(chunks, pluginapi.ExecutorStreamChunk{Payload: cp})
+		}
+		if done {
+			_ = p.bridge.StreamClose(streamID)
+			break
+		}
+	}
+	return okEnvelope(map[string]any{"headers": respHdrs, "chunks": chunks})
+}
+
+// pumpUpstreamStream forwards upstream chunks to the host-side client stream
+// and closes it when done. Mid-stream failures reach the client through
+// error/error_detail on host.stream.close.
+func (p *Plugin) pumpUpstreamStream(pluginStreamID, upstreamStreamID string) {
+	// DLL 场景 panic=宿主全进程崩溃；兜底转成流错误并尽力释放上游。
+	defer func() {
+		if r := recover(); r != nil {
+			_ = p.bridge.StreamClose(upstreamStreamID)
+			p.bridge.FinishStream(pluginStreamID, fmt.Sprintf("pump panic: %v", r), nil)
+		}
+	}()
+	for {
+		payload, errMsg, done, rerr := p.bridge.StreamRead(upstreamStreamID)
+		if rerr != nil {
+			_ = p.bridge.StreamClose(upstreamStreamID)
+			p.bridge.FinishStream(pluginStreamID, rerr.Error(), &pluginabi.Error{
+				Code: "transient_transport", Message: rerr.Error(), HTTPStatus: 502,
+			})
+			return
+		}
+		if errMsg != "" {
+			_ = p.bridge.StreamClose(upstreamStreamID)
+			msg := errMsg
+			if len(payload) > 0 { // 中途错误的响应体常含原因，别丢
+				msg = errMsg + ": " + string(payload)
+			}
+			p.bridge.FinishStream(pluginStreamID, msg, nil)
+			return
+		}
+		if len(payload) > 0 {
+			if err := p.bridge.EmitStream(pluginStreamID, payload); err != nil {
+				// host 侧客户端流已取消/超时：释放上游流后静默退出，
+				// 再 close 一个已死的流只会制造噪音。
+				_ = p.bridge.StreamClose(upstreamStreamID)
+				return
+			}
+		}
+		if done {
+			_ = p.bridge.StreamClose(upstreamStreamID)
+			p.bridge.FinishStream(pluginStreamID, "", nil)
+			return
+		}
+	}
+}
+
+type errString string
+
+func (e errString) Error() string { return string(e) }
+
+// errEnvelopeHostBytes serializes a host-protocol error envelope.
+func errEnvelopeHostBytes(e pluginabi.Error) []byte {
+	raw, _ := json.Marshal(abiEnvelope{OK: false, Error: &e})
+	return raw
+}
+
+var _ = strings.TrimSpace
