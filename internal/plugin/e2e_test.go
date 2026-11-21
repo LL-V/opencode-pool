@@ -47,11 +47,13 @@ func TestEndToEndLifecycle(t *testing.T) {
 		var env pluginabi.Envelope
 		_ = json.Unmarshal(out, &env)
 		var resp struct {
-			AuthID string
-			Yield  bool
+			AuthID  string
+			Handled bool
+			Reject  bool
 		}
 		_ = json.Unmarshal(env.Result, &resp)
-		return resp.AuthID, resp.Yield
+		_ = resp.Reject
+		return resp.AuthID, !resp.Handled
 	}
 
 	execStream := func(authID string) (ok bool, code string) {

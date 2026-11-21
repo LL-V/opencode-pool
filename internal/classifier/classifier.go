@@ -59,10 +59,13 @@ type errorBody struct {
 	Resets  string `json:"resets_at"`
 }
 
+// defaultConcurrencyKeywords is used when ConfigField concurrency_keywords
+// is empty (the operator may override wording without a recompile).
+var defaultConcurrencyKeywords = []string{"concurr", "parallel", "simultaneous"}
+
 var (
-	limitRe       = regexp.MustCompile(`current limit:\s*(\d+)`)
-	concurrencyRe = regexp.MustCompile(`concurr|parallel|simultaneous`)
-	quotaWordsRe  = regexp.MustCompile(`usage_limit_reached|usage limit`)
+	limitRe      = regexp.MustCompile(`current limit:\s*(\d+)`)
+	quotaWordsRe = regexp.MustCompile(`usage_limit_reached|usage limit`)
 	// 窗口名与 /zen/go/v1/usage 的真实键一致（rolling/weekly/monthly，
 	// 2026-11-21 实测），429 被动标记与 API 主动拉取才能按同名窗口合并。
 	windowRes = []struct{ word, name string }{
@@ -83,6 +86,15 @@ var (
 
 // Classify inspects an upstream response. body may be nil.
 func Classify(status int, body []byte, headers http.Header) Result {
+	return ClassifyWithKeywords(status, body, headers, nil)
+}
+
+// ClassifyWithKeywords is Classify with operator-configured concurrency
+// keywords (ConfigField concurrency_keywords). Empty uses the defaults.
+func ClassifyWithKeywords(status int, body []byte, headers http.Header, keywords []string) Result {
+	if len(keywords) == 0 {
+		keywords = defaultConcurrencyKeywords
+	}
 	if status == 200 || status < 300 && status > 0 {
 		return Result{Category: CategoryNone}
 	}
@@ -100,11 +112,11 @@ func Classify(status int, body []byte, headers http.Header) Result {
 		// 并发判定要求强信号（deep-check P1）：type=rate_limit_error 或显式
 		// "current limit: N"。裸词表命中（如限额文案里出现 concurrently）
 		// 不再判并发——误判会把真限额当 2 秒瞬时错误无限重试。
-		if eb.Error.Type == "rate_limit_error" && concurrencyRe.MatchString(lmsg) {
+		if eb.Error.Type == "rate_limit_error" && hasConcurrencyWord(lmsg, keywords) {
 			// type=rate_limit_error 是强信号：message 内的并发词表可信。
 			return Result{Category: CategoryConcurrency, Limit: parseLimit(msg)}
 		}
-		if parseLimit(msg) > 0 && (eb.Error.Type == "rate_limit_error" || concurrencyRe.MatchString(lmsg)) {
+		if parseLimit(msg) > 0 && (eb.Error.Type == "rate_limit_error" || hasConcurrencyWord(lmsg, keywords)) {
 			// "current limit: N" 短语本身是并发语义（限额上限不会这么表述）；
 			// token 量级数字由 parseLimit 的 ≤64 上限挡住。
 			return Result{Category: CategoryConcurrency, Limit: parseLimit(msg)}
@@ -136,6 +148,16 @@ func Classify(status int, body []byte, headers http.Header) Result {
 		return Result{Category: CategoryTransient}
 	}
 	return Result{Category: CategoryNone}
+}
+
+func hasConcurrencyWord(lowerMessage string, keywords []string) bool {
+	for _, w := range keywords {
+		w = strings.ToLower(strings.TrimSpace(w))
+		if w != "" && strings.Contains(lowerMessage, w) {
+			return true
+		}
+	}
+	return false
 }
 
 // HostError builds the error to return to the host pipeline per the M5 table.
@@ -210,10 +232,10 @@ func matchWindow(msg string) (bool, string) {
 func quotaResult(window string, eb errorBody, headers http.Header, now time.Time) Result {
 	r := Result{Category: CategoryQuota, Window: window}
 	for _, raw := range []string{eb.ResetAt, eb.Resets, eb.Error.ResetAt, eb.Error.Resets} {
-		if raw == "" {
+		if strings.TrimSpace(raw) == "" {
 			continue
 		}
-		if ts, err := time.Parse(time.RFC3339, raw); err == nil {
+		if ts, ok := parseResetAt(raw, now); ok {
 			r.ResetAt = ts
 			return r
 		}
@@ -234,16 +256,72 @@ func quotaResult(window string, eb errorBody, headers http.Header, now time.Time
 	return r
 }
 
+var relativeResetRe = regexp.MustCompile(`(?i)(\d+(?:\.\d+)?)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\b`)
+
+// parseResetAt accepts the formats upstreams use in practice: RFC3339,
+// RFC1123/HTTP-date, unix seconds/milliseconds, and "resets in 4h 30m".
+func parseResetAt(raw string, now time.Time) (time.Time, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return time.Time{}, false
+	}
+	if ts, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return ts, true
+	}
+	if ts, err := http.ParseTime(s); err == nil {
+		return ts, true
+	}
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil && n > 1e9 {
+		if n > 1e12 { // milliseconds
+			n /= 1000
+		}
+		return time.Unix(n, 0), true
+	}
+	if lower := strings.ToLower(s); strings.Contains(lower, "in ") {
+		// 只解析 "in" 之后的时长（"4h 30m" 这种多段也覆盖），避免误吞
+		// 文案里的其他数字（例如 "limit 5"）。
+		tail := s[strings.LastIndex(lower, "in ")+3:]
+		var total time.Duration
+		matches := relativeResetRe.FindAllStringSubmatch(tail, -1)
+		for _, m := range matches {
+			v, err := strconv.ParseFloat(m[1], 64)
+			if err != nil {
+				continue
+			}
+			unit := strings.ToLower(m[2])
+			switch {
+			case strings.HasPrefix(unit, "s"):
+				total += time.Duration(v * float64(time.Second))
+			case strings.HasPrefix(unit, "m"):
+				total += time.Duration(v * float64(time.Minute))
+			case strings.HasPrefix(unit, "h"):
+				total += time.Duration(v * float64(time.Hour))
+			case strings.HasPrefix(unit, "d"):
+				total += time.Duration(v * float64(24*time.Hour))
+			}
+		}
+		if total > 0 {
+			return now.Add(total), true
+		}
+	}
+	return time.Time{}, false
+}
+
 func retryAfter(headers http.Header) time.Duration {
 	if headers == nil {
 		return 0
 	}
-	v := headers.Get("Retry-After")
+	v := strings.TrimSpace(headers.Get("Retry-After"))
 	if v == "" {
 		return 0
 	}
-	if secs, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+	if secs, err := strconv.Atoi(v); err == nil {
 		return time.Duration(secs) * time.Second
+	}
+	if ts, err := http.ParseTime(v); err == nil {
+		if d := time.Until(ts); d > 0 {
+			return d
+		}
 	}
 	return 0
 }

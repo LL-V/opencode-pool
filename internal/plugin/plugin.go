@@ -17,7 +17,7 @@ import (
 const (
 	PluginID      = "opencode-pool"
 	ProviderID    = "opencode-go"
-	PluginVersion = "0.2.3"
+	PluginVersion = "0.2.4"
 )
 
 // Plugin is the assembled capability set plus runtime state.
@@ -30,6 +30,16 @@ type Plugin struct {
 	mu           sync.Mutex
 	usageFetchMu sync.Mutex
 	usageFetched map[string]time.Time // per-auth /usage pull throttle
+	usageSeenMu  sync.Mutex
+	usageSeen    map[string]time.Time // RequestID idempotency (host replays)
+	// host.auth.list cache (id → entry): the panel poll and quota paths all
+	// need auth_index, but ids alone are not accepted by host auth.get.
+	authListMu sync.Mutex
+	authList   map[string]pluginapi.HostAuthFileEntry
+	authListAt time.Time
+	modelsMu   sync.Mutex
+	modelsIDs  []string
+	modelsAt   time.Time
 }
 
 // autoFlushInterval is the periodic state.json persist cadence.
@@ -64,6 +74,9 @@ func (p *Plugin) applyConfig(raw []byte) error {
 	p.mu.Lock()
 	p.cfg = cfg
 	p.mu.Unlock()
+	// 宿主 config_yaml 每次 register 都会覆盖；面板保存的运行时设置必须
+	// 再叠回去，否则 PUT /settings 在重启/重配后全部失效。
+	p.loadSettingsOverlay()
 	return nil
 }
 

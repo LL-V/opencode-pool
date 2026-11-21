@@ -16,7 +16,11 @@ func (p *Plugin) quotaFetch(request []byte) ([]byte, error) {
 	// 主动路径：宿主会按自己的节奏反复调 quota.fetch；这里复用面板同一个
 	// 节流器（5 分钟/账号），否则上游 /usage 会被持续探测。
 	if req.AuthID != "" && !p.store.IsPurged(req.AuthID) {
-		p.refreshUsage(req.AuthID)
+		index := req.AuthIndex
+		if index == "" {
+			index = p.hostAuthEntries()[req.AuthID].AuthIndex
+		}
+		p.refreshUsage(req.AuthID, index)
 	}
 	snap := p.store.Snapshot()
 	acc := snap.Accounts[req.AuthID]
@@ -24,9 +28,19 @@ func (p *Plugin) quotaFetch(request []byte) ([]byte, error) {
 	if acc != nil {
 		var groups []pluginapi.QuotaGroup
 		for name, w := range acc.Windows {
+			if name == "" {
+				continue
+			}
+			remaining := (100 - w.UsedPct) / 100
+			if remaining < 0 {
+				remaining = 0
+			}
+			if remaining > 1 {
+				remaining = 1
+			}
 			bucket := pluginapi.QuotaBucket{
 				Window:            name,
-				RemainingFraction: (100 - w.UsedPct) / 100,
+				RemainingFraction: remaining,
 				ResetTime:         w.Until.UTC().Format(time.RFC3339),
 				Description:       "source:" + w.Source,
 			}

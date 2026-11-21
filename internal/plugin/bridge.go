@@ -59,13 +59,36 @@ type hostAuthListResp struct {
 	Files []pluginapi.HostAuthFileEntry `json:"files"`
 }
 
+// hostAuthSaveReq mirrors pluginapi.HostAuthSaveRequest: the host validates
+// "name" (must be a bare *.json file) and "json" (credential object). The
+// older {"auth": {...}} shape made every save fail with
+// "invalid auth file name" (real-host report).
 type hostAuthSaveReq struct {
-	Auth pluginapi.AuthData `json:"auth"`
+	Name string          `json:"name"`
+	JSON json.RawMessage `json:"json"`
+}
+
+type hostAuthSaveResp struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+type hostAuthGetReq struct {
+	AuthIndex string `json:"auth_index"`
+}
+
+type hostAuthGetResp struct {
+	AuthIndex string          `json:"auth_index"`
+	Name      string          `json:"name,omitempty"`
+	Path      string          `json:"path,omitempty"`
+	JSON      json.RawMessage `json:"json"`
 }
 
 // Bridge wraps host callbacks with envelope handling and shutdown draining.
 type Bridge struct {
 	caller   HostCaller
+	mu       sync.Mutex
+	closed   bool
 	inFlight sync.WaitGroup
 }
 
@@ -82,7 +105,15 @@ func decodeEnvelope(raw []byte) (pluginabi.Envelope, error) {
 
 func (b *Bridge) invoke(method string, payload any, what string) (pluginabi.Envelope, error) {
 	raw, _ := json.Marshal(payload)
+	// Add must never race with Wait when the counter is zero; a closed
+	// bridge refuses new callbacks during shutdown instead.
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return pluginabi.Envelope{}, fmt.Errorf("%s failed: bridge closed", what)
+	}
 	b.inFlight.Add(1)
+	b.mu.Unlock()
 	defer b.inFlight.Done()
 	resp, err := b.caller.CallHost(method, raw)
 	if err != nil {
@@ -104,6 +135,9 @@ func (b *Bridge) invoke(method string, payload any, what string) (pluginabi.Enve
 
 // WaitForInFlight drains callbacks for shutdown.
 func (b *Bridge) WaitForInFlight(timeout time.Duration) bool {
+	b.mu.Lock()
+	b.closed = true
+	b.mu.Unlock()
 	done := make(chan struct{})
 	go func() { b.inFlight.Wait(); close(done) }()
 	select {
@@ -201,15 +235,26 @@ func (b *Bridge) AuthList() ([]pluginapi.HostAuthFileEntry, error) {
 	return out.Files, nil
 }
 
-// AuthSave materializes an auth record on the host.
-func (b *Bridge) AuthSave(auth pluginapi.AuthData) error {
-	_, err := b.invoke(pluginabi.MethodHostAuthSave, hostAuthSaveReq{Auth: auth}, "host auth save")
-	return err
+// AuthSave materializes an auth file on the host (fileName must end in
+// .json; rawJSON is the credential document).
+func (b *Bridge) AuthSave(fileName string, rawJSON []byte) (hostAuthSaveResp, error) {
+	env, err := b.invoke(pluginabi.MethodHostAuthSave, hostAuthSaveReq{Name: fileName, JSON: rawJSON}, "host auth save")
+	if err != nil {
+		return hostAuthSaveResp{}, err
+	}
+	var out hostAuthSaveResp
+	if len(env.Result) > 0 {
+		if err := json.Unmarshal(env.Result, &out); err != nil {
+			return hostAuthSaveResp{}, fmt.Errorf("host auth save failed: undecodable response")
+		}
+	}
+	return out, nil
 }
 
-// ResetCooldown clears host-side cooldown state for an auth.
-func (b *Bridge) ResetCooldown(authID string) error {
-	_, err := b.invoke(pluginabi.MethodHostRoutingResetCooldown, map[string]string{"auth_id": authID}, "host routing reset cooldown")
+// ResetCooldown clears host-side cooldown state for a credential. The host
+// addresses credentials by auth_index, not by our internal auth id.
+func (b *Bridge) ResetCooldown(authIndex string) error {
+	_, err := b.invoke(pluginabi.MethodHostRoutingResetCooldown, map[string]string{"auth_index": authIndex}, "host routing reset cooldown")
 	return err
 }
 
@@ -219,19 +264,18 @@ func (b *Bridge) Log(level, message string) {
 	_, _ = b.invoke(pluginabi.MethodHostLog, payload, "host log")
 }
 
-// AuthGet returns one auth document's raw storage JSON.
-func (b *Bridge) AuthGet(authID string) ([]byte, error) {
-	env, err := b.invoke(pluginabi.MethodHostAuthGet, map[string]string{"auth_id": authID}, "host auth get")
+// AuthGet returns one credential's raw JSON by host auth_index (the host
+// rejects auth ids here: callHostAuthGet reads req.AuthIndex).
+func (b *Bridge) AuthGet(authIndex string) ([]byte, error) {
+	env, err := b.invoke(pluginabi.MethodHostAuthGet, hostAuthGetReq{AuthIndex: authIndex}, "host auth get")
 	if err != nil {
 		return nil, err
 	}
-	var out struct {
-		Auth pluginapi.AuthData `json:"auth"`
-	}
+	var out hostAuthGetResp
 	if len(env.Result) > 0 {
 		if err := json.Unmarshal(env.Result, &out); err != nil {
 			return nil, fmt.Errorf("host auth get failed: undecodable response")
 		}
 	}
-	return out.Auth.StorageJSON, nil
+	return out.JSON, nil
 }

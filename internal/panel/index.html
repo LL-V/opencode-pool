@@ -121,30 +121,48 @@ const API="/v0/management/plugins/opencode-pool";
 const $=s=>document.querySelector(s);
 let sel=null,timer=null,data={accounts:[]};
 let lastJson="",lastRenderAt=0;const openIds=new Set();
-const key=()=>{if(localStorage.ocp_key)return localStorage.ocp_key;
-  try{const a=JSON.parse(localStorage.getItem("cli-proxy-auth")||"");const k=a&&a.state&&a.state.managementKey;if(typeof k==="string"&&k)return k}catch(_){}return""};
+function readAuthKey(){
+  for(const st of [localStorage,sessionStorage]){
+    try{const raw=st.getItem("cli-proxy-auth")||"";if(!raw||raw.startsWith("enc::"))continue;
+      const a=JSON.parse(raw);const k=a&&a.state&&a.state.managementKey;
+      if(typeof k==="string"&&k)return k}catch(_){}
+  }
+  return"";
+}
+const key=()=>localStorage.ocp_key||readAuthKey();
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmt=n=>n==null?"—":n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(1)+"k":String(n);
 function showErr(m){const e=$("#err");e.textContent=m;e.style.display=m?"block":"none"}
+function stopLoop(){if(timer){clearInterval(timer);timer=null}}
 async function api(p,o={}){
-  let r;try{r=await fetch(API+p,{...o,headers:{...o.headers,"Authorization":"Bearer "+key(),"Content-Type":"application/json"}})}
+  const k=key();
+  if(!k){stopLoop();$("#keybar").classList.add("show");showErr("请输入管理密钥后连接；CPAMP 登录勾选「记住密码」可自动读取");throw 0}
+  let r;try{r=await fetch(API+p,{...o,headers:{...o.headers,"Authorization":"Bearer "+k,"Content-Type":"application/json"}})}
   catch(e){showErr("网络错误："+e.message+"  "+p);throw 0}
-  if(r.status===401){$("#keybar").classList.add("show");$("#key").focus();showErr("需要管理密钥（401）— CPAMP 登录勾选「记住密码」可免输");throw 0}
+  if(r.status===401||r.status===403){
+    // 宿主连续 5 次鉴权失败会封 IP 30 分钟：立刻停止轮询，等用户输入。
+    stopLoop();$("#keybar").classList.add("show");
+    if(document.activeElement!==$("#key"))$("#key").focus();
+    showErr("管理密钥无效或已失效（"+r.status+"）— 输入正确密钥后点「连接」；请勿反复自动重试");
+    throw 0;
+  }
   const t=await r.text();
   if(!r.ok){let m=t;try{m=JSON.parse(t).error?.message||t}catch(_){}
     if(r.status===502&&/connection refused|dial tcp/i.test(m))
       m="管理端不可达（"+m+"）\n请检查 CPAMP 里配置的 CPA 地址和端口，CPA 需要正在运行。";
     showErr("请求失败 "+r.status+"  "+p+"\n"+m);throw r}
-  showErr("");return JSON.parse(t)
+  let d;try{d=JSON.parse(t)}catch(_){showErr("管理端返回了非 JSON 响应："+t.slice(0,200));throw 0}
+  showErr("");return d
 }
 function state(a){
+  // 顺序必须与后端 statusString 一致：停用 > 耗尽 > 需登录 > 待验证 > 接近 > 可用
   const w=a.windows||[],now=Date.now();
-  if(a.requires_sign_in)return{k:"danger",t:"需重新登录"};
+  if(a.enabled===false)return{k:"neutral",t:"已停用"};
   const ex=w.find(x=>x.used_pct>=100&&new Date(x.until)>now);
   if(ex)return{k:"danger",t:"额度用尽 · "+rel(ex.until)};
+  if(a.requires_sign_in)return{k:"danger",t:"需重新登录"};
   if(a.verify_pending)return{k:"warn",t:"待验证"};
-  if(w.some(x=>x.used_pct>=92))return{k:"warn",t:"接近限额"};
-  if(a.enabled===false)return{k:"neutral",t:"已停用"};
+  if(w.some(x=>x.used_pct>=92&&new Date(x.until)>now))return{k:"warn",t:"接近限额"};
   return{k:"ok",t:"可用"}
 }
 function rel(iso){if(!iso)return"—";const m=(new Date(iso)-Date.now())/6e4;
@@ -231,6 +249,7 @@ function ago(iso){if(!iso)return"—";const s=(Date.now()-new Date(iso))/1e3;
 async function act(a,action,e){
   e&&e.stopPropagation();
   try{
+    if(action==="u"&&!confirm("恢复 "+(a.label||a.id)+"？\n会清空该账号的限额窗口并重置宿主冷却。"))return;
     if(action==="u")await api("/account/unblock",{method:"POST",body:JSON.stringify({id:a.id})});
     if(action==="e")await api("/account",{method:"PATCH",body:JSON.stringify({id:a.id,enabled:a.enabled===false})});
     if(action==="x"){
@@ -250,7 +269,15 @@ async function load(){
     lastJson=j;lastRenderAt=Date.now();data=d;render()
   }catch(_){}
 }
-function loop(){if(timer)clearInterval(timer);load();timer=setInterval(load,5000)}
+let pollMs=5000;
+async function syncSettings(){
+  try{const s=await api("/settings");const n=+s.panel_poll_seconds;if(n>=2&&n<=120)pollMs=n*1000}catch(_){}
+}
+function loop(){
+  stopLoop();
+  if(!key()){$("#keybar").classList.add("show");showErr("输入管理密钥后点「连接」");return}
+  syncSettings().then(()=>{load();timer=setInterval(load,pollMs)})
+}
 $("#conn").onclick=()=>{localStorage.ocp_key=$("#key").value;$("#keybar").classList.remove("show");loop()};
 $("#add").onclick=()=>{$("#modal").classList.add("open");$("#mname").focus()};
 $("#mca").onclick=()=>$("#modal").classList.remove("open");

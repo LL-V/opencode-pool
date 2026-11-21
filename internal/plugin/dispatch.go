@@ -62,10 +62,10 @@ func (p *Plugin) HandleMethod(method string, request []byte) ([]byte, error) {
 		// 本插件不走宿主 HTTP 转发执行器路径（上游调用经 host.http.do）。
 		return errEnvelopeHostBytes(pluginabi.Error{Code: "not_implemented", Message: "executor.http_request not used", HTTPStatus: 501}), nil
 	case pluginabi.MethodExecutorCountTokens:
-		// 上游无 count 端点；真实转发等于一次计费生成，且宿主 count_tokens
-		// 适配器无 usage.handle（inflight 永久泄漏，deep-check P1）。诚实返回
-		// not_implemented，宿主回退本地估算。
-		return errEnvelopeHostBytes(pluginabi.Error{Code: "not_implemented", Message: "opencode-go has no count_tokens endpoint", HTTPStatus: 501}), nil
+		// 上游无 count 端点，真实转发等于一次计费生成；这里本地估算。
+		// 宿主对 501 不会回退估算（conductor_execution.go 直接上抛），
+		// 所以必须自己返回一个 input_tokens 响应。
+		return p.countTokens(request)
 	case pluginabi.MethodSchedulerPick:
 		return p.pick(request)
 	case pluginabi.MethodUsageHandle:
@@ -163,9 +163,16 @@ func (p *Plugin) reconcileWithHost() {
 	}
 	live := map[string]bool{}
 	for _, f := range files {
-		if f.Provider == ProviderID {
-			live[f.ID] = true
+		// 宿主启动时 register 早于 SetAuthManager，auth.list 走磁盘回退：
+		// 条目 ID/AuthIndex 为空。空 id 绝不能当作“唯一存活账号”，否则
+		// Reconcile 会清空刚载入的全部窗口/绑定/学习上限（真实启动路径）。
+		if f.Provider != ProviderID || strings.TrimSpace(f.ID) == "" {
+			continue
 		}
+		live[f.ID] = true
+	}
+	if len(live) == 0 {
+		return // auth manager not ready (or genuinely empty): keep persisted state
 	}
 	p.store.Reconcile(live)
 }
@@ -184,12 +191,10 @@ func (p *Plugin) interceptBefore(request []byte) ([]byte, error) {
 	if sid == "" {
 		return okEnvelope(pluginapi.RequestInterceptResponse{})
 	}
+	// Host merges returned headers over the current request (mergeHeaders),
+	// so returning only the injected session header is correct and preserves
+	// every other client header.
 	hdrs := http.Header{}
-	for k := range req.Headers {
-		if equalFold(k, "x-opencode-session") {
-			continue
-		}
-	}
 	hdrs.Set("X-Opencode-Session", sid)
 	return okEnvelope(pluginapi.RequestInterceptResponse{Headers: hdrs})
 }

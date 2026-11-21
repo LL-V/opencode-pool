@@ -36,15 +36,17 @@ func TestPickSkipsSingleExhaustedWindow(t *testing.T) {
 	}
 	var env pluginabi.Envelope
 	_ = json.Unmarshal(out, &env)
+	// SchedulerPickResponse 无 json tags → 宿主/测试都按 Go 字段名读取。
 	var resp struct {
-		AuthID string `json:"auth_id"`
-		Yield  bool   `json:"yield"`
+		AuthID  string
+		Handled bool
+		Reject  bool
 	}
 	_ = json.Unmarshal(env.Result, &resp)
-	if resp.Yield {
-		t.Skipf("宿主语义：全部候选被暂停时让权是合法结果（healthy 为何未被选中需查）：%s", env.Result)
-	}
-	if resp.AuthID == exhausted && !resp.Yield {
+	if resp.AuthID == exhausted {
 		t.Fatalf("单窗口耗尽的账号不得被选中（会撞 429 墙）：%s", env.Result)
+	}
+	if resp.Handled && resp.Reject && resp.AuthID != "" {
+		t.Fatalf("Reject 不应带选中账号：%s", env.Result)
 	}
 }

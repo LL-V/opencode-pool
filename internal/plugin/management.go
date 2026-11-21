@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -58,16 +59,16 @@ func mgmtError(status int, code, message string) mgmtResponse {
 	return mgmtResponse{StatusCode: status, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: raw}
 }
 
-// statusString mirrors the §9 six-color dot derivation as a string.
+// statusString mirrors the §9 six-color dot derivation as a string and must
+// stay in the same priority order as the panel's state() function.
 func statusString(acc accountView) string {
-	for _, w := range acc.Windows {
-		if w.UsedPct >= 100 && time.Now().Before(mustTime(w.Until)) {
-			return "exhausted"
-		}
+	now := time.Now()
+	if !acc.Enabled {
+		return "disabled"
 	}
 	for _, w := range acc.Windows {
-		if w.UsedPct >= 92 {
-			return "near_limit"
+		if w.UsedPct >= 100 && now.Before(mustTime(w.Until)) {
+			return "exhausted"
 		}
 	}
 	if acc.RequiresSignIn {
@@ -76,8 +77,10 @@ func statusString(acc accountView) string {
 	if acc.VerifyPending {
 		return "verify_pending"
 	}
-	if !acc.Enabled {
-		return "disabled"
+	for _, w := range acc.Windows {
+		if w.UsedPct >= 92 && now.Before(mustTime(w.Until)) {
+			return "near_limit"
+		}
 	}
 	return "active"
 }
@@ -177,16 +180,38 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 
 	case method == "GET" && path == "/accounts":
 		snap := p.store.Snapshot()
+		auths := p.hostAuthEntries()
+		counts := p.store.BindingCounts(time.Now())
 		views := make([]accountView, 0, len(snap.Accounts))
 		for id, acc := range snap.Accounts {
-			// 已删除账号（墓碑）与误入的其他 provider 账号不得出现在面板。
-			if p.store.IsPurged(id) || p.foreignAccount(id) {
+			if p.store.IsPurged(id) {
 				p.store.PurgeAccount(id)
 				continue
 			}
-			p.refreshUsage(id) // 后台拉 /usage 填充窗口（节流），下次轮询可见
-			views = append(views, p.viewOf(id, acc, snap, false))
+			entry, inHost := auths[id]
+			// 误入的其他 provider 账号（例如 claude:apikey:*）必须清理：
+			// 宿主列表里存在但 provider 不同，或宿主根本不认识这个 id。
+			if (inHost && foreignAccount(id, auths)) || (auths != nil && !inHost && !strings.HasPrefix(id, ProviderID+":")) {
+				p.store.PurgeAccount(id)
+				continue
+			}
+			p.refreshUsage(id, entry.AuthIndex) // 后台拉 /usage，节流
+			views = append(views, p.viewOf(id, acc, snap, false, counts[id]))
 		}
+		// 稳定排序：map 迭代顺序随机会让前端 JSON 去重永不命中，5s 全量重建。
+		sort.Slice(views, func(i, j int) bool {
+			li, lj := views[i].Label, views[j].Label
+			if li == "" {
+				li = views[i].ID
+			}
+			if lj == "" {
+				lj = views[j].ID
+			}
+			if li != lj {
+				return li < lj
+			}
+			return views[i].ID < views[j].ID
+		})
 		return mgmtJSON(map[string]any{"accounts": views})
 
 	case method == "GET" && path == "/account":
@@ -202,8 +227,8 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 		if !ok {
 			return mgmtError(404, "account_not_found", "no such account")
 		}
-		p.refreshUsage(id)
-		return mgmtJSON(p.viewOf(id, acc, snap, true))
+		p.refreshUsage(id, p.hostAuthEntries()[id].AuthIndex)
+		return mgmtJSON(p.viewOf(id, acc, snap, true, p.store.BindingCounts(time.Now())[id]))
 
 	case method == "POST" && path == "/accounts":
 		var in struct {
@@ -230,7 +255,7 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 			return mgmtError(502, "upstream_error", err.Error())
 		}
 		snap := p.store.Snapshot()
-		return mgmtJSON(p.viewOf(id, snap.Accounts[id], snap, false))
+		return mgmtJSON(p.viewOf(id, snap.Accounts[id], snap, false, p.store.BindingCounts(time.Now())[id]))
 
 	case method == "GET" && path == "/settings":
 		return mgmtJSON(p.config())
@@ -247,7 +272,10 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 		if p.bridge != nil {
 			files, _ := p.bridge.AuthList()
 			for _, f := range files {
-				raw, err := p.bridge.AuthGet(f.ID)
+				if f.Provider != ProviderID || f.AuthIndex == "" || p.store.IsPurged(f.ID) {
+					continue
+				}
+				raw, err := p.bridge.AuthGet(f.AuthIndex)
 				if err != nil {
 					continue
 				}
@@ -305,6 +333,9 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 		if in.ID == "" {
 			return mgmtError(400, "invalid_request", "id required")
 		}
+		if !p.accountExists(in.ID) {
+			return mgmtError(404, "account_not_found", "no such account")
+		}
 		p.store.SetEnabled(in.ID, *in.Enabled)
 		return mgmtJSON(map[string]any{"id": in.ID, "enabled": *in.Enabled})
 
@@ -313,11 +344,16 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 		if id == "" {
 			return mgmtError(400, "invalid_request", "id required")
 		}
+		if !p.accountExists(id) {
+			return mgmtError(404, "account_not_found", "no such account")
+		}
 		p.store.SetRequiresSignIn(id, false)
 		p.store.SetVerifyPending(id, false)
 		p.store.ClearWindows(id)
 		if p.bridge != nil {
-			_ = p.bridge.ResetCooldown(id)
+			if entry, ok := p.hostAuthEntries()[id]; ok {
+				_ = p.bridge.ResetCooldown(entry.AuthIndex)
+			}
 		}
 		return mgmtJSON(map[string]any{"id": id, "recovered": true})
 
@@ -326,6 +362,11 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 		if id == "" {
 			return mgmtError(400, "invalid_request", "id required")
 		}
+		entry, ok := p.hostAuthEntries()[id]
+		if !ok {
+			return mgmtError(404, "account_not_found", "no such account")
+		}
+		p.forceRefreshUsage(id, entry.AuthIndex)
 		return mgmtJSON(map[string]any{"id": id, "refreshed": true})
 
 	case method == "POST" && path == "/account/bindings/clear":
@@ -341,13 +382,18 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 		if id == "" {
 			return mgmtError(400, "invalid_request", "id required")
 		}
+		if !p.accountExists(id) && !(query != nil && query.Get("purge") == "true" && p.store.IsPurged(id)) {
+			return mgmtError(404, "account_not_found", "no such account")
+		}
 		if query != nil && query.Get("purge") == "true" {
 			// 硬删插件侧状态并留墓碑；host auth 文件归 host 管（ABI 无删除
 			// 回调），墓碑保证重启/usage 事件都不会把它带回来。
-			p.store.PurgeAccount(id)
 			if p.bridge != nil {
-				_ = p.bridge.ResetCooldown(id)
+				if entry, ok := p.hostAuthEntries()[id]; ok {
+					_ = p.bridge.ResetCooldown(entry.AuthIndex)
+				}
 			}
+			p.store.PurgeAccount(id)
 			return mgmtJSON(map[string]any{"id": id, "deleted": true, "purged": true, "host_file": "retained"})
 		}
 		p.store.SetEnabled(id, false)
@@ -358,6 +404,20 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 
 // maxImportAccounts bounds one import batch (DoS guard).
 const maxImportAccounts = 1000
+
+// accountExists reports whether the id is a live plugin account or a host
+// credential. Mutating endpoints must not EnsureAccount unknown ids: a typo
+// used to create phantom accounts.
+func (p *Plugin) accountExists(id string) bool {
+	if id == "" || p.store.IsPurged(id) {
+		return false
+	}
+	if _, ok := p.store.Snapshot().Accounts[id]; ok {
+		return true
+	}
+	_, ok := p.hostAuthEntries()[id]
+	return ok
+}
 
 // queryID resolves the account id from the query string first, then a JSON
 // body {"id": "..."} (fixed-path routes carry dynamic ids out of the path).
@@ -385,25 +445,41 @@ func (p *Plugin) materializeAccount(name, key string) (string, error) {
 	if label == "" {
 		label = maskKey(key)
 	}
-	st := storage{Type: "opencode-go", Name: name, APIKey: key, Label: label}
+	st := storage{Type: ProviderID, Name: name, APIKey: key, Label: label}
 	raw, _ := json.Marshal(st)
 	sum := sha256.Sum256([]byte(key))
 	id := ProviderID + ":" + hex.EncodeToString(sum[:])[:12]
 	if p.bridge != nil {
-		if err := p.bridge.AuthSave(pluginapi.AuthData{
-			Provider: ProviderID, ID: id,
-			FileName: "opencode-" + hex.EncodeToString(sum[:])[:8] + ".json",
-			Label:    st.Label, StorageJSON: raw,
-		}); err != nil {
+		// host.auth.save wire: {"name": "<bare>.json", "json": <credential>}
+		// （HostAuthSaveRequest；旧的 {"auth":…} 会报 invalid auth file name）。
+		fileName := "opencode-" + hex.EncodeToString(sum[:])[:8] + ".json"
+		if _, err := p.bridge.AuthSave(fileName, raw); err != nil {
 			return "", err
 		}
+		p.invalidateAuthList()
+		// 宿主按文件内容生成凭据 ID；正常情况下与本地指纹一致，仍以宿主为准。
+		if files, err := p.bridge.AuthList(); err == nil {
+			for _, f := range files {
+				if f.Provider != ProviderID {
+					continue
+				}
+				if f.ID == id || f.Name == fileName {
+					if f.ID != "" {
+						id = f.ID
+					}
+					break
+				}
+			}
+		}
 	}
+	p.invalidateAuthList()
 	p.store.ClearPurge(id) // 同一 key 重新添加 = 撤销删除
+	p.store.SetEnabled(id, true)
 	p.store.EnsureAccount(id)
 	return id, nil
 }
 
-func (p *Plugin) viewOf(id string, acc *storeAccount, snap store.Snapshot, detail bool) accountView {
+func (p *Plugin) viewOf(id string, acc *storeAccount, snap store.Snapshot, detail bool, bindings int) accountView {
 	if acc == nil {
 		// 并发 purge 后快照可能已无此账号；跨 cgo panic 会拖垮宿主进程。
 		acc = &storeAccount{}
@@ -416,7 +492,21 @@ func (p *Plugin) viewOf(id string, acc *storeAccount, snap store.Snapshot, detai
 		RequiresSignIn:          acc.RequiresSignIn,
 		VerifyPending:           acc.VerifyPending,
 	}
-	for name, w := range acc.Windows {
+	// 固定窗口顺序：map 随机迭代会让 /accounts 的 JSON 每轮都变。
+	for _, name := range []string{"rolling", "weekly", "monthly"} {
+		if w, ok := acc.Windows[name]; ok {
+			v.Windows = append(v.Windows, windowView{Window: name, UsedPct: w.UsedPct, Until: w.Until.UTC().Format(time.RFC3339), Source: w.Source})
+		}
+	}
+	var extra []string
+	for name := range acc.Windows {
+		if name != "rolling" && name != "weekly" && name != "monthly" {
+			extra = append(extra, name)
+		}
+	}
+	sort.Strings(extra)
+	for _, name := range extra {
+		w := acc.Windows[name]
 		v.Windows = append(v.Windows, windowView{Window: name, UsedPct: w.UsedPct, Until: w.Until.UTC().Format(time.RFC3339), Source: w.Source})
 	}
 	v.Usage = usageView{Requests: acc.Usage.Requests, InputTokens: acc.Usage.InputTokens, OutputTokens: acc.Usage.OutputTokens}
@@ -426,8 +516,8 @@ func (p *Plugin) viewOf(id string, acc *storeAccount, snap store.Snapshot, detai
 	if acc.LastError != nil {
 		v.LastError = &lastError{Code: acc.LastError.Code, At: acc.LastError.At.UTC().Format(time.RFC3339)}
 	}
+	v.BindingsCount = bindings
 	if detail {
-		v.BindingsCount = snap.BindingsFor(id)
 		for _, h := range acc.History {
 			v.History = append(v.History, historyEntry{At: h.At.UTC().Format(time.RFC3339), Code: h.Code})
 		}
@@ -444,18 +534,37 @@ func mustTime(s string) time.Time {
 	return t
 }
 
-// maskedKeyFor fetches the account's api key for masked display.
-// authInfoFor reads one auth document and returns (label, maskedKey).
+// authInfoFor reads one credential and returns (label, maskedKey). The host
+// list entry carries auth_index; auth.get rejects our internal id.
 func (p *Plugin) authInfoFor(id string) (string, string) {
 	if p.bridge == nil {
 		return labelFromID(id), ""
 	}
-	raw, err := p.bridge.AuthGet(id)
-	if err != nil {
+	entry, ok := p.hostAuthEntries()[id]
+	if !ok {
 		return labelFromID(id), ""
 	}
+	label := strings.TrimSpace(entry.Label)
+	if entry.AuthIndex == "" {
+		if label == "" {
+			label = labelFromID(id)
+		}
+		return label, ""
+	}
+	raw, err := p.bridge.AuthGet(entry.AuthIndex)
+	if err != nil {
+		if label == "" {
+			label = labelFromID(id)
+		}
+		return label, ""
+	}
 	st := parseStorage(raw)
-	label := st.Label
+	if label == "" {
+		label = strings.TrimSpace(st.Label)
+	}
+	if label == "" {
+		label = strings.TrimSpace(st.Name)
+	}
 	if label == "" {
 		label = labelFromID(id)
 	}
@@ -479,19 +588,58 @@ func labelFromID(id string) string {
 	return id
 }
 
+// hostAuthListTTL keeps the panel's 5s poll from hammering host.auth.list.
+const hostAuthListTTL = 3 * time.Second
+
+// hostAuthEntries returns live host credentials keyed by auth id. The host
+// addresses credentials by auth_index in auth.get / routing.reset_cooldown,
+// so callers resolve ids through this map.
+func (p *Plugin) hostAuthEntries() map[string]pluginapi.HostAuthFileEntry {
+	if p.bridge == nil {
+		return nil
+	}
+	p.authListMu.Lock()
+	defer p.authListMu.Unlock()
+	if p.authList != nil && time.Since(p.authListAt) < hostAuthListTTL {
+		return p.authList
+	}
+	files, err := p.bridge.AuthList()
+	if err != nil {
+		return nil
+	}
+	m := make(map[string]pluginapi.HostAuthFileEntry, len(files))
+	for _, f := range files {
+		if f.ID != "" {
+			m[f.ID] = f
+		}
+	}
+	p.authList = m
+	p.authListAt = time.Now()
+	return m
+}
+
+func (p *Plugin) invalidateAuthList() {
+	p.authListMu.Lock()
+	p.authList = nil
+	p.authListMu.Unlock()
+}
+
 // foreignAccount reports a store record that belongs to another provider
 // (e.g. claude:apikey:…), seeded by the host-global usage stream. Such ids
 // are never created by this plugin (materialize always uses ProviderID).
-func (p *Plugin) foreignAccount(id string) bool {
-	if strings.HasPrefix(id, ProviderID+":") || p.bridge == nil {
+func foreignAccount(id string, auths map[string]pluginapi.HostAuthFileEntry) bool {
+	if strings.HasPrefix(id, ProviderID+":") {
 		return false
 	}
-	raw, err := p.bridge.AuthGet(id)
-	if err != nil || len(raw) == 0 {
-		return false // unknown ≠ foreign: never purge on a transient FFI error
+	entry, ok := auths[id]
+	if !ok {
+		return false // unknown ≠ foreign: never purge on missing transient data
 	}
-	st := parseStorage(raw)
-	return st.Type != "" && st.Type != ProviderID
+	provider := entry.Provider
+	if provider == "" {
+		provider = entry.Type
+	}
+	return provider != "" && provider != ProviderID
 }
 
 // usageRefreshInterval bounds how often the panel silently polls each
@@ -499,10 +647,19 @@ func (p *Plugin) foreignAccount(id string) bool {
 // is plenty for quota bars and keeps upstream traffic quiet.
 const usageRefreshInterval = 5 * time.Minute
 
+// forceRefreshUsage bypasses the per-account throttle (explicit operator
+// action) and kicks a background /usage pull.
+func (p *Plugin) forceRefreshUsage(id, authIndex string) {
+	p.usageFetchMu.Lock()
+	delete(p.usageFetched, id)
+	p.usageFetchMu.Unlock()
+	p.refreshUsage(id, authIndex)
+}
+
 // refreshUsage pulls /usage in the background (throttled) so window bars
 // appear without waiting for a 429.
-func (p *Plugin) refreshUsage(id string) {
-	if p.bridge == nil || p.store.IsPurged(id) {
+func (p *Plugin) refreshUsage(id, authIndex string) {
+	if p.bridge == nil || p.store.IsPurged(id) || authIndex == "" || !p.config().QuotaProbeEnabled {
 		return
 	}
 	p.usageFetchMu.Lock()
@@ -516,7 +673,7 @@ func (p *Plugin) refreshUsage(id string) {
 	p.usageFetched[id] = time.Now()
 	p.usageFetchMu.Unlock()
 	go func() {
-		raw, err := p.bridge.AuthGet(id)
+		raw, err := p.bridge.AuthGet(authIndex)
 		if err != nil {
 			return
 		}

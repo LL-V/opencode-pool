@@ -29,8 +29,22 @@ const maxSessionIDLen = 512
 // documented body fields, then a derivation stable per conversation. A nil
 // header and nil body (plugin-initiated probe) yields a fresh UUID.
 func Resolve(h http.Header, body []byte) string {
+	return ResolveWithSources(h, body, nil)
+}
+
+// ResolveWithSources is Resolve with the operator-configured header priority
+// list (ConfigField session_header_sources). Empty keeps the built-in list.
+func ResolveWithSources(h http.Header, body []byte, sources []string) string {
+	list := headerSources
+	if len(sources) > 0 {
+		list = sources
+	}
 	if h != nil {
-		for _, src := range headerSources {
+		for _, src := range list {
+			src = strings.TrimSpace(src)
+			if src == "" {
+				continue
+			}
 			if v := sanitize(h.Get(src)); v != "" {
 				return v
 			}
@@ -94,17 +108,35 @@ func bodyField(body []byte) string {
 // derive produces a stable per-conversation id from the first user message
 // (system messages never participate). With no user message it falls back to
 // the raw body hash so odd shapes (count_tokens, invalid JSON) stay stable.
+type derivedMessage struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
 func derive(body []byte) string {
 	var root struct {
-		Messages []struct {
-			Role    string          `json:"role"`
-			Content json.RawMessage `json:"content"`
-		} `json:"messages"`
+		Messages []derivedMessage `json:"messages"`
+		// OpenAI Responses API uses input[] (array of messages or a string).
+		Input json.RawMessage `json:"input"`
 	}
-	if err := json.Unmarshal(body, &root); err != nil || len(root.Messages) == 0 {
+	if err := json.Unmarshal(body, &root); err != nil {
 		return hashPrefix("b", body)
 	}
-	for i, msg := range root.Messages {
+	msgs := root.Messages
+	if len(msgs) == 0 && len(root.Input) > 0 {
+		var text string
+		if json.Unmarshal(root.Input, &text) == nil && text != "" {
+			return hashPrefix("d", []byte(text))
+		}
+		var arr []derivedMessage
+		if json.Unmarshal(root.Input, &arr) == nil {
+			msgs = arr
+		}
+	}
+	if len(msgs) == 0 {
+		return hashPrefix("b", body)
+	}
+	for i, msg := range msgs {
 		if msg.Role != "user" {
 			continue
 		}
@@ -122,7 +154,7 @@ func derive(body []byte) string {
 		// Only LATER USER messages may feed the derivation — assistant replies
 		// grow turn by turn, so "any role" would re-key the conversation every
 		// turn (deep-check P1). No user anchor at all → empty-string constant.
-		for _, later := range root.Messages[i+1:] {
+		for _, later := range msgs[i+1:] {
 			if later.Role != "user" {
 				continue
 			}
@@ -149,7 +181,7 @@ func nonTextAnchor(raw json.RawMessage) string {
 		return ""
 	}
 	for _, item := range items {
-		if item["type"] == "text" {
+		if isTextBlock(item) {
 			continue
 		}
 		if u, ok := item["url"].(string); ok && u != "" {
@@ -187,13 +219,23 @@ func textOf(raw json.RawMessage) (string, bool) {
 	}
 	var parts []string
 	for _, item := range items {
-		if item["type"] == "text" {
+		if isTextBlock(item) {
 			if t, ok := item["text"].(string); ok {
 				parts = append(parts, t)
 			}
 		}
 	}
 	return strings.Join(parts, "\x00"), true
+}
+
+// isTextBlock accepts both chat-completions ("text") and Responses API
+// ("input_text"/"output_text") content blocks.
+func isTextBlock(item map[string]any) bool {
+	switch item["type"] {
+	case "text", "input_text", "output_text":
+		return true
+	}
+	return false
 }
 
 func hashPrefix(prefix string, data []byte) string {

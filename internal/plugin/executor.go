@@ -46,7 +46,7 @@ func parseStorage(raw []byte) storage {
 // resolveSession finds the conversation id, preferring already-injected
 // headers (BeforeAuth ran first), then body fields, then derivation.
 func (p *Plugin) resolveSession(hdrs http.Header, body []byte) string {
-	return session.Resolve(hdrs, body)
+	return session.ResolveWithSources(hdrs, body, p.config().SessionHeaderSources)
 }
 
 // endpointFor maps the negotiated format onto the upstream path.
@@ -69,13 +69,18 @@ func (p *Plugin) applyOutboundHeaders(hdrs http.Header, body []byte) http.Header
 		// 凭据类头一律重建：客户端的 Authorization/x-api-key 不得透传上游
 		// （会绕过账号池鉴权或携带外币凭据）。
 		if equalFold(k, "User-Agent") || equalFold(k, "x-opencode-session") ||
-			equalFold(k, "Authorization") || equalFold(k, "x-api-key") {
+			equalFold(k, "Authorization") || equalFold(k, "x-api-key") ||
+			equalFold(k, "api-key") || equalFold(k, "x-goog-api-key") ||
+			equalFold(k, "Cookie") ||
+			// 客户端显式带 Accept-Encoding 时 Go 不会自动解压；
+			// 交给 host transport 自己协商，避免压缩流破坏 SSE/用量解析。
+			equalFold(k, "Accept-Encoding") {
 			continue
 		}
 		out[k] = v
 	}
 	out.Set("User-Agent", p.config().UpstreamUserAgent)
-	if sid := session.Resolve(hdrs, body); sid != "" {
+	if sid := p.resolveSession(hdrs, body); sid != "" {
 		out.Set("X-Opencode-Session", sid)
 	}
 	return out
@@ -84,31 +89,110 @@ func (p *Plugin) applyOutboundHeaders(hdrs http.Header, body []byte) http.Header
 // classifyUpstream applies store effects and returns the host error payload
 // for non-2xx statuses (nil for 2xx).
 func (p *Plugin) classifyUpstream(authID string, status int, body []byte, hdrs http.Header) *hostErrPayload {
-	res := classifier.Classify(status, body, hdrs)
-	switch res.Category {
-	case classifier.CategoryNone:
+	if status >= 200 && status < 300 {
+		// 成功即证明凭据可用：清掉此前疑态（verify_pending 曾永久残留）。
+		p.store.SetVerifyPending(authID, false)
+		p.store.SetRequiresSignIn(authID, false)
 		return nil
+	}
+	res := classifier.ClassifyWithKeywords(status, body, hdrs, p.config().ConcurrencyKeywords)
+	switch res.Category {
 	case classifier.CategoryConcurrency:
 		p.store.LearnLimit(authID, res.Limit)
 	case classifier.CategoryQuota:
-		p.store.ObserveWindowSource(authID, res.Window, "429", 100, res.ResetAt, time.Now())
+		window := res.Window
+		if window == "" {
+			window = "rolling" // 无窗口词时不写空键
+		}
+		p.store.ObserveWindowSource(authID, window, "429", 100, res.ResetAt, time.Now())
 	case classifier.CategoryAuthInvalid:
-		// host refresh path owns the retry; only mark on repeated terminal 401
-		// (host condemns after its own refresh attempt).
+		// api_key accounts have no refresh path: a terminal 401 needs sign-in.
+		p.store.SetRequiresSignIn(authID, true)
 	case classifier.CategoryWAFBlock:
 	case classifier.CategoryAuthSuspect:
 		p.store.SetVerifyPending(authID, true)
 	}
 	if res.Category == classifier.CategoryNone {
-		// 未分类的非 2xx（404/422/418…）不得伪装成功信封透传下游
-		// （deep-check：级联 404 会当 200 payload 返回）。
-		return &hostErrPayload{Code: "upstream_error", Message: "upstream rejected request", HTTPStatus: status}
+		// 未分类非 2xx（404/422/3xx…）绝不伪造成 200；用 request_scoped
+		// 防止宿主把 404 当成模型问题冷却 12 小时。
+		if status == 404 {
+			p.InvalidateModelsCache(authID)
+		}
+		msg := upstreamSnippet(body)
+		if msg == "" {
+			msg = "upstream rejected request"
+		}
+		return &hostErrPayload{Code: "request_scoped", Message: msg, HTTPStatus: status}
 	}
 	he := res.HostError()
+	if res.Category == classifier.CategoryTransient {
+		he.HTTPStatus = status // 保留 408/500/502/503/504，别统一成 503
+	}
+	if he.Message == "" {
+		he.Message = upstreamSnippet(body)
+	}
+	if he.Message == "" {
+		he.Message = "upstream error " + statusText(status)
+	}
 	return &hostErrPayload{
 		Code: he.Code, Message: he.Message, HTTPStatus: he.HTTPStatus,
 		RetryAfterSeconds: he.RetryAfterSeconds, CredentialScoped: he.CredentialScoped,
 	}
+}
+
+// upstreamSnippet keeps a bounded, human-readable slice of the upstream
+// error body so the client sees the real reason instead of "plugin call
+// failed". Control characters are collapsed.
+func upstreamSnippet(body []byte) string {
+	s := strings.TrimSpace(string(body))
+	if s == "" {
+		return ""
+	}
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > 300 {
+		s = s[:300] + "…"
+	}
+	return s
+}
+
+func statusText(status int) string {
+	switch status {
+	case 400:
+		return "bad request"
+	case 401:
+		return "unauthorized"
+	case 403:
+		return "forbidden"
+	case 404:
+		return "not found"
+	case 429:
+		return "rate limited"
+	}
+	return "status"
+}
+
+// countTokens returns a local estimate (upstream has no billing-free count
+// endpoint, and the host does not fall back on 501).
+func (p *Plugin) countTokens(request []byte) ([]byte, error) {
+	var req pluginapi.ExecutorRequest
+	if err := json.Unmarshal(request, &req); err != nil {
+		return nil, err
+	}
+	body, _ := json.Marshal(map[string]int{"input_tokens": estimateTokens(req.Payload)})
+	return okEnvelope(pluginapi.ExecutorResponse{
+		Payload: body,
+		Headers: http.Header{"Content-Type": []string{"application/json"}},
+	})
+}
+
+// estimateTokens is a coarse ~4 bytes/token approximation of the serialized
+// request. It never performs an upstream call.
+func estimateTokens(payload []byte) int {
+	n := len(payload) / 4
+	if n < 1 {
+		n = 1
+	}
+	return n
 }
 
 // execute serves executor.execute / execute_stream / count_tokens.
@@ -136,7 +220,13 @@ func (p *Plugin) execute(request []byte, stream bool) ([]byte, error) {
 
 	hdrs := p.applyOutboundHeaders(req.Headers, req.Payload)
 	hdrs.Set("Authorization", "Bearer "+st.APIKey)
-	url := upstream.Join(st.BaseURL, endpointFor(req.Format))
+	// 上游端点由“请求体格式”(SourceFormat=inputFormat) 决定；Format 是
+	// 宿主期望的响应格式。跨格式路由时两者不同，用 Format 会打错端点。
+	reqFormat := req.SourceFormat
+	if strings.TrimSpace(reqFormat) == "" {
+		reqFormat = req.Format
+	}
+	url := upstream.Join(st.BaseURL, endpointFor(reqFormat))
 
 	ctx := context.Background()
 	if stream {
@@ -159,7 +249,7 @@ func (p *Plugin) execute(request []byte, stream bool) ([]byte, error) {
 // SessionID 为空），executor 是它们唯一的绑定写入点；派生键 d- 稳定于首条
 // user 消息，b-（body 哈希）逐请求变化无亲和价值，跳过。
 func (p *Plugin) bindSession(authID string, hdrs http.Header, body []byte) {
-	sid := session.Resolve(hdrs, body)
+	sid := p.resolveSession(hdrs, body)
 	if sid == "" || strings.HasPrefix(sid, "b-") {
 		return
 	}
@@ -234,7 +324,10 @@ func (p *Plugin) pumpUpstreamStream(pluginStreamID, upstreamStreamID string) {
 	defer func() {
 		if r := recover(); r != nil {
 			_ = p.bridge.StreamClose(upstreamStreamID)
-			p.bridge.FinishStream(pluginStreamID, fmt.Sprintf("pump panic: %v", r), nil)
+			msg := fmt.Sprintf("pump panic: %v", r)
+			p.bridge.FinishStream(pluginStreamID, msg, &pluginabi.Error{
+				Code: "stream_truncated", Message: msg, HTTPStatus: 502,
+			})
 		}
 	}()
 	for {
@@ -250,16 +343,21 @@ func (p *Plugin) pumpUpstreamStream(pluginStreamID, upstreamStreamID string) {
 			_ = p.bridge.StreamClose(upstreamStreamID)
 			msg := errMsg
 			if len(payload) > 0 { // 中途错误的响应体常含原因，别丢
-				msg = errMsg + ": " + string(payload)
+				msg = errMsg + ": " + upstreamSnippet(payload)
 			}
-			p.bridge.FinishStream(pluginStreamID, msg, nil)
+			// stream_truncated: 生成已提交上游，宿主不得换号重试、也不冷却凭据。
+			p.bridge.FinishStream(pluginStreamID, msg, &pluginabi.Error{
+				Code: "stream_truncated", Message: msg, HTTPStatus: 502,
+			})
 			return
 		}
 		if len(payload) > 0 {
 			if err := p.bridge.EmitStream(pluginStreamID, payload); err != nil {
-				// host 侧客户端流已取消/超时：释放上游流后静默退出，
-				// 再 close 一个已死的流只会制造噪音。
 				_ = p.bridge.StreamClose(upstreamStreamID)
+				// 非取消类失败（回调实例重建等）也必须收尾，否则宿主流挂起。
+				p.bridge.FinishStream(pluginStreamID, "stream emit failed: "+err.Error(), &pluginabi.Error{
+					Code: "connection_lifecycle", Message: err.Error(), HTTPStatus: 502,
+				})
 				return
 			}
 		}

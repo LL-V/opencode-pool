@@ -91,11 +91,19 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, pluginAPI *C.cliproxy_plugi
 }
 
 //export OpenCodePoolPluginCall
-func OpenCodePoolPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t, response *C.cliproxy_buffer) C.int {
+func OpenCodePoolPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t, response *C.cliproxy_buffer) (ret C.int) {
 	if response != nil {
 		response.ptr = nil
 		response.len = 0
 	}
+	// A panic must never cross the cgo boundary: it would abort the host
+	// process. Convert it into a normal error envelope instead.
+	defer func() {
+		if r := recover(); r != nil {
+			writeResponse(response, errorEnvelopeBytes("plugin_panic", fmt.Sprint(r)))
+			ret = 0
+		}
+	}()
 	if method == nil {
 		writeResponse(response, errorEnvelopeBytes("invalid_method", "method is required"))
 		return 0
@@ -173,7 +181,16 @@ func handleLifecycle(method string, request []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	_ = prev // state restore + auto-flush live in plugin.restoreState (register)
+	// Register/reconfigure can arrive in-process more than once (host
+	// rollback/reload). Stop the previous auto-flush loop *before* the new
+	// store loads state.json, otherwise both goroutines write the same file
+	// and the stale snapshot overwrites fresh windows/bindings/tombstones.
+	if prev != nil {
+		if b := prev.Bridge(); b != nil {
+			b.WaitForInFlight(2 * time.Second)
+		}
+		prev.Shutdown()
+	}
 	abiState.Lock()
 	abiState.plugin = p
 	abiState.Unlock()

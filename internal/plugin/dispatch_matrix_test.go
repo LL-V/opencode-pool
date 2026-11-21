@@ -79,17 +79,17 @@ func TestSchedulerStateMatrix(t *testing.T) {
 				var env pluginabi.Envelope
 				_ = json.Unmarshal(out, &env)
 				var resp struct {
-					AuthID string
-					Yield  bool
-					Reject bool
+					AuthID  string
+					Handled bool
+					Reject  bool
 				}
 				_ = json.Unmarshal(env.Result, &resp)
 
 				if resp.AuthID == "" {
 					// 让权/拒绝：存在 bad 信号时不得静默让权回坏池。
 					if badStates[a] || badStates[b] {
-						if !resp.Reject {
-							t.Fatalf("存在 bad 候选 %s+%s 时不得静默让权：%s", a, b, env.Result)
+						if !resp.Handled || !resp.Reject {
+							t.Fatalf("存在 bad 候选 %s+%s 时必须 Handled+Reject：%s", a, b, env.Result)
 						}
 					}
 					// 全健康无信号让权=合同设计，合法。

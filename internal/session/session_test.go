@@ -174,3 +174,52 @@ func TestResolveEmptyBodyProbe(t *testing.T) {
 		t.Fatal("探测 UUID 每次应不同")
 	}
 }
+
+// Responses API（input[]）也必须能派生稳定会话（R006 覆盖 /v1/responses）。
+func TestDeriveResponsesInput(t *testing.T) {
+	a := []byte(`{"model":"x","input":[{"role":"user","content":"hello responses"}]}`)
+	b := []byte(`{"model":"x","instructions":"changed","input":[{"role":"user","content":"hello responses"}]}`)
+	sa, sb := Resolve(nil, a), Resolve(nil, b)
+	if !strings.HasPrefix(sa, "d-") || sa != sb {
+		t.Fatalf("input[] 派生应稳定：%q vs %q", sa, sb)
+	}
+	str := Resolve(nil, []byte(`{"input":"hello string"}`))
+	if !strings.HasPrefix(str, "d-") {
+		t.Fatalf("字符串 input 应派生：%q", str)
+	}
+}
+
+// 配置的 header 源列表应覆盖默认优先级。
+func TestResolveWithSourcesOverride(t *testing.T) {
+	h := http.Header{}
+	h.Set("X-Opencode-Session", "default-wins")
+	h.Set("X-Custom-Session", "custom-wins")
+	if got := ResolveWithSources(h, nil, []string{"x-custom-session"}); got != "custom-wins" {
+		t.Fatalf("自定义源优先：%q", got)
+	}
+	if got := Resolve(h, nil); got != "default-wins" {
+		t.Fatalf("默认源：%q", got)
+	}
+}
+
+// Responses input[] 的 input_text 必须可派生；后续 user 文本回退不得
+// 使用空 root.Messages 切片（曾越界 panic [1:0]）。
+func TestDeriveResponsesInputBlocksNoPanic(t *testing.T) {
+	body := []byte(`{"input":[
+	  {"role":"user","content":[{"type":"input_text","text":"first question"}]},
+	  {"role":"assistant","content":[{"type":"output_text","text":"answer"}]}
+	]}`)
+	got := Resolve(nil, body)
+	if !strings.HasPrefix(got, "d-") {
+		t.Fatalf("input_text 应派生 d-：%q", got)
+	}
+	// 第一条 user 无文本无锚点，触发“后续 user”回退路径
+	odd := []byte(`{"input":[
+	  {"role":"user","content":[{"type":"input_text"}]},
+	  {"role":"assistant","content":[{"type":"output_text","text":"a"}]},
+	  {"role":"user","content":[{"type":"input_text","text":"later"}]}
+	]}`)
+	if got := Resolve(nil, odd); !strings.HasPrefix(got, "d-") {
+		t.Fatalf("回退派生：%q", got)
+	}
+}

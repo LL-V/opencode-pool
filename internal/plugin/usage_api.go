@@ -1,9 +1,10 @@
 package plugin
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"cpa-plugin-opencode-pool/internal/store"
@@ -25,9 +26,9 @@ type usageWindow = store.Window
 func parseUsageResponse(body []byte) map[string]usageWindow {
 	var payload struct {
 		Usage map[string]struct {
-			Status   string `json:"status"`
-			Percent  int    `json:"percent"`
-			ResetsAt string `json:"resetsAt"`
+			Status   string          `json:"status"`
+			Percent  json.RawMessage `json:"percent"`
+			ResetsAt string          `json:"resetsAt"`
 		} `json:"usage"`
 	}
 	if len(body) == 0 || json.Unmarshal(body, &payload) != nil || payload.Usage == nil {
@@ -43,7 +44,10 @@ func parseUsageResponse(body []byte) map[string]usageWindow {
 		if err != nil {
 			continue
 		}
-		pct := float64(w.Percent)
+		pct, ok := parsePercent(w.Percent)
+		if !ok {
+			continue
+		}
 		if w.Status == "limited" && pct < 100 {
 			pct = 100
 		}
@@ -52,20 +56,40 @@ func parseUsageResponse(body []byte) map[string]usageWindow {
 	return out
 }
 
+// parsePercent accepts a JSON number or numeric string (upstream may change
+// the wire type without breaking the whole payload).
+func parsePercent(raw json.RawMessage) (float64, bool) {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return 0, false
+	}
+	var f float64
+	if err := json.Unmarshal(raw, &f); err == nil {
+		return f, true
+	}
+	var str string
+	if err := json.Unmarshal(raw, &str); err == nil {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(str), 64); err == nil {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
 // fetchAndApplyUsage pulls /usage for one account and merges into the store
 // (monotonic-with-authority rules apply inside ObserveWindowSource).
 func (p *Plugin) fetchAndApplyUsage(authID, apiKey, baseURL string) bool {
 	if p.bridge == nil || apiKey == "" {
 		return false
 	}
-	resp, err := p.bridge.Do(context.Background(), pluginapi.HTTPRequest{
+	resp, err := p.doProbe(pluginapi.HTTPRequest{
 		Method: "GET",
 		URL:    upstream.Join(baseURL, "usage"),
 		Headers: http.Header{
 			"User-Agent":    []string{p.config().UpstreamUserAgent},
 			"Authorization": []string{"Bearer " + apiKey},
 		},
-	}, "")
+	})
 	if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return false
 	}

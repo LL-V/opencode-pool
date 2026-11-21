@@ -1,6 +1,8 @@
 package plugin
 
 import (
+	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -42,10 +44,11 @@ func TestUsageIgnoresPurgedAccount(t *testing.T) {
 // GET /accounts 必须清理并隐藏误入的宿主原生账号（history 中已写入 state.json
 // 的幽灵条目，升级后无需重启也应消失）。
 func TestManagementHidesForeignAccounts(t *testing.T) {
-	host := &fakeHost{byID: map[string]map[string]any{
+	host := &fakeHost{byID: map[string]*fakeAuth{
 		"claude:apikey:672b3a714f95": {
-			"ID": "claude:apikey:672b3a714f95", "Provider": "claude",
-			"StorageJSON": []byte(`{"type":"claude","api_key":"sk-ant-demo"}`),
+			ID: "claude:apikey:672b3a714f95", Index: "idx-claude",
+			Name: "claude.json", Provider: "claude",
+			Raw: []byte(`{"type":"claude","api_key":"sk-ant-demo"}`),
 		},
 	}}
 	p := newTestPlugin(t, host)
@@ -64,10 +67,11 @@ func TestManagementHidesForeignAccounts(t *testing.T) {
 
 // 本插件账号（即使没有名字）不得被清理规则误伤。
 func TestManagementKeepsUnnamedOwnAccount(t *testing.T) {
-	host := &fakeHost{byID: map[string]map[string]any{
+	host := &fakeHost{byID: map[string]*fakeAuth{
 		"opencode-go:abcdef123456": {
-			"ID": "opencode-go:abcdef123456", "Provider": ProviderID,
-			"StorageJSON": []byte(`{"type":"opencode-go","api_key":"oc_sk_x"}`),
+			ID: "opencode-go:abcdef123456", Index: "idx-own",
+			Name: "own.json", Provider: ProviderID,
+			Raw: []byte(`{"type":"opencode-go","api_key":"oc_sk_x"}`),
 		},
 	}}
 	p := newTestPlugin(t, host)
@@ -75,6 +79,39 @@ func TestManagementKeepsUnnamedOwnAccount(t *testing.T) {
 	resp := p.HandleManagement("GET", "/accounts", nil, nil)
 	if !strings.Contains(string(resp.Body), "opencode-go:abcdef123456") {
 		t.Fatalf("本插件账号不得被清理：%s", resp.Body)
+	}
+}
+
+// 真实宿主 wire 回归（用户实测 502 invalid auth file name）：
+// host.auth.save 必须是 {"name":"x.json","json":{...}}，不是 {"auth":{...}}。
+func TestAddAccountUsesHostAuthSaveWire(t *testing.T) {
+	host := &fakeHost{}
+	p := newTestPlugin(t, host)
+	id := addAccount(t, p, "a@x.com", "oc_sk_wire_aaaaaaaaaaaaaaaa")
+	if len(host.saved) != 1 {
+		t.Fatalf("应发一次 host.auth.save：%v", host.saved)
+	}
+	req := host.saved[0]
+	name, _ := req["name"].(string)
+	if !strings.HasSuffix(name, ".json") || strings.ContainsAny(name, "/\\") {
+		t.Fatalf("auth 文件名不合法：%q", name)
+	}
+	raw, ok := req["json"].(json.RawMessage)
+	if !ok || !strings.Contains(string(raw), `"api_key"`) || !strings.Contains(string(raw), `"opencode-go"`) {
+		t.Fatalf("auth json 内容不对：%s", req["json"])
+	}
+	// 详情必须能按宿主 auth_index 取回并显示脱敏 key（旧实现用 auth_id 永远取不到）
+	resp := p.HandleManagement("GET", "/account", url.Values{"id": {id}}, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET account: %d %s", resp.StatusCode, resp.Body)
+	}
+	var v accountView
+	_ = json.Unmarshal(resp.Body, &v)
+	if v.Label != "a@x.com" {
+		t.Fatalf("账户名：got %q", v.Label)
+	}
+	if v.APIKeyMasked != maskKey("oc_sk_wire_aaaaaaaaaaaaaaaa") {
+		t.Fatalf("脱敏 key：got %q", v.APIKeyMasked)
 	}
 }
 

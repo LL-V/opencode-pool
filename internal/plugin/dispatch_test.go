@@ -16,12 +16,24 @@ import (
 type fakeHost struct {
 	upstreams []fakeUpstream // 按序消费
 	calls     []string
-	saved     []map[string]any
-	byID      map[string]map[string]any
+	saved     []map[string]any // 原始 auth.save 请求
+	byID      map[string]*fakeAuth
 	script    []fakeChunk // StreamRead 按序消费
 	emits     []string    // "streamID|payload"（host.stream.emit）
 	closes    []string    // "streamID|err"（host.stream.close）
+	lastURL   string      // 最近一次 host.http.do 的 URL
 	mu        sync.Mutex
+}
+
+// fakeAuth models one host credential entry (id + stable auth_index + file
+// JSON), mirroring the real pluginhost auth callbacks.
+type fakeAuth struct {
+	ID       string
+	Index    string
+	Name     string
+	Provider string
+	Label    string
+	Raw      []byte
 }
 type fakeUpstream struct {
 	status int
@@ -50,6 +62,13 @@ func (f *fakeHost) CallHost(method string, payload []byte) ([]byte, error) {
 	f.record(method)
 	switch method {
 	case pluginabi.MethodHostHTTPDo, pluginabi.MethodHostHTTPDoStream:
+		var hostReq struct {
+			URL string `json:"url"`
+		}
+		_ = json.Unmarshal(payload, &hostReq)
+		f.mu.Lock()
+		f.lastURL = hostReq.URL
+		f.mu.Unlock()
 		up := fakeUpstream{status: 200, body: `{"ok":true}`}
 		if len(f.upstreams) > 0 {
 			up = f.upstreams[0]
@@ -101,41 +120,55 @@ func (f *fakeHost) CallHost(method string, payload []byte) ([]byte, error) {
 		return wrapOK([]byte(`{}`)), nil
 	case pluginabi.MethodHostAuthList:
 		f.mu.Lock()
-		ids := make([]string, 0, len(f.byID))
-		for id := range f.byID {
-			ids = append(ids, id)
+		entries := make([]*fakeAuth, 0, len(f.byID))
+		for _, a := range f.byID {
+			entries = append(entries, a)
 		}
 		f.mu.Unlock()
-		if len(ids) == 0 {
-			ids = []string{"opencode-go:aaa"}
+		if len(entries) == 0 {
+			entries = []*fakeAuth{{ID: "opencode-go:aaa", Index: "idx-aaa", Name: "aaa.json", Provider: ProviderID}}
 		}
-		files := make([]map[string]any, 0, len(ids))
-		for _, id := range ids {
-			files = append(files, map[string]any{"ID": id, "Provider": ProviderID, "Status": "active"})
+		files := make([]map[string]any, 0, len(entries))
+		for _, a := range entries {
+			files = append(files, map[string]any{
+				"id": a.ID, "auth_index": a.Index, "name": a.Name,
+				"provider": a.Provider, "type": a.Provider, "label": a.Label,
+			})
 		}
-		raw, _ := json.Marshal(map[string]any{"Files": files})
+		raw, _ := json.Marshal(map[string]any{"files": files})
 		return wrapOK(raw), nil
 	case pluginabi.MethodHostAuthSave:
+		// 宿主 wire：{"name": "<bare>.json", "json": <credential object>}
 		var req struct {
-			Auth map[string]any `json:"auth"`
+			Name string          `json:"name"`
+			JSON json.RawMessage `json:"json"`
 		}
-		_ = json.Unmarshal(payload, &req)
-		f.saved = append(f.saved, req.Auth)
+		if err := json.Unmarshal(payload, &req); err != nil || req.Name == "" || len(req.JSON) == 0 {
+			return json.Marshal(pluginabi.Envelope{OK: false, Error: &pluginabi.Error{Code: "bad_request", Message: "invalid auth file name"}})
+		}
+		f.saved = append(f.saved, map[string]any{"name": req.Name, "json": req.JSON})
 		if f.byID == nil {
-			f.byID = map[string]map[string]any{}
+			f.byID = map[string]*fakeAuth{}
 		}
-		if id, _ := req.Auth["ID"].(string); id != "" {
-			f.byID[id] = req.Auth
+		st := parseStorage(req.JSON)
+		fp := keyFingerprint(st.APIKey)
+		id := ProviderID + ":" + fp
+		f.byID[id] = &fakeAuth{
+			ID: id, Index: "idx-" + fp[:6], Name: req.Name,
+			Provider: ProviderID, Label: st.Label, Raw: append([]byte(nil), req.JSON...),
 		}
-		return wrapOK([]byte(`{}`)), nil
+		raw, _ := json.Marshal(map[string]any{"name": req.Name, "path": "/auth/" + req.Name})
+		return wrapOK(raw), nil
 	case pluginabi.MethodHostAuthGet:
 		var req struct {
-			AuthID string `json:"auth_id"`
+			AuthIndex string `json:"auth_index"`
 		}
 		_ = json.Unmarshal(payload, &req)
-		if auth, ok := f.byID[req.AuthID]; ok {
-			raw, _ := json.Marshal(map[string]any{"Auth": auth})
-			return wrapOK(raw), nil
+		for _, a := range f.byID {
+			if a.Index == req.AuthIndex && req.AuthIndex != "" {
+				raw, _ := json.Marshal(map[string]any{"auth_index": a.Index, "name": a.Name, "json": json.RawMessage(a.Raw)})
+				return wrapOK(raw), nil
+			}
 		}
 		return wrapOK([]byte(`{}`)), nil
 	}

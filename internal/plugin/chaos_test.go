@@ -99,29 +99,41 @@ func (c *chaosHost) CallHost(method string, payload []byte) ([]byte, error) {
 		return wrapOK([]byte(`{}`)), nil
 	case pluginabi.MethodHostAuthSave:
 		var req struct {
-			Auth map[string]any `json:"auth"`
+			Name string          `json:"name"`
+			JSON json.RawMessage `json:"json"`
 		}
 		_ = json.Unmarshal(payload, &req)
-		if id, _ := req.Auth["ID"].(string); id != "" {
-			c.authByID[id] = req.Auth
+		if req.Name != "" && len(req.JSON) > 0 {
+			fp := keyFingerprint(parseStorage(req.JSON).APIKey)
+			id := ProviderID + ":" + fp
+			c.authByID[id] = map[string]any{
+				"id": id, "auth_index": "idx-" + fp[:6], "name": req.Name,
+				"provider": ProviderID, "json": req.JSON,
+			}
 		}
-		return wrapOK([]byte(`{}`)), nil
+		raw, _ := json.Marshal(map[string]any{"name": req.Name, "path": "/auth/" + req.Name})
+		return wrapOK(raw), nil
 	case pluginabi.MethodHostAuthGet:
 		var req struct {
-			AuthID string `json:"auth_id"`
+			AuthIndex string `json:"auth_index"`
 		}
 		_ = json.Unmarshal(payload, &req)
-		if auth, ok := c.authByID[req.AuthID]; ok {
-			raw, _ := json.Marshal(map[string]any{"Auth": auth})
-			return wrapOK(raw), nil
+		for _, auth := range c.authByID {
+			if idx, _ := auth["auth_index"].(string); idx == req.AuthIndex && idx != "" {
+				raw, _ := json.Marshal(map[string]any{"auth_index": idx, "json": auth["json"]})
+				return wrapOK(raw), nil
+			}
 		}
 		return wrapOK([]byte(`{}`)), nil
 	case pluginabi.MethodHostAuthList:
 		files := make([]map[string]any, 0, len(c.authByID))
-		for id := range c.authByID {
-			files = append(files, map[string]any{"ID": id, "Provider": ProviderID, "Status": "active"})
+		for _, auth := range c.authByID {
+			files = append(files, map[string]any{
+				"id": auth["id"], "auth_index": auth["auth_index"],
+				"name": auth["name"], "provider": ProviderID, "type": ProviderID,
+			})
 		}
-		raw, _ := json.Marshal(map[string]any{"Files": files})
+		raw, _ := json.Marshal(map[string]any{"files": files})
 		return wrapOK(raw), nil
 	}
 	return wrapOK([]byte(`{}`)), nil
@@ -251,8 +263,10 @@ func TestChaosEmitFailureReleasesUpstream(t *testing.T) {
 	if !host.upClosed["up-1"] {
 		t.Fatal("emit 失败后必须释放上游流")
 	}
-	if len(host.closeOnce) != 0 {
-		t.Fatalf("死流不应再 close 宿主流：%v", host.closeOnce)
+	// emit 失败也必须收尾宿主流（带 connection_lifecycle），否则请求会挂到
+	// 客户端超时、usage/inflight 迟迟不回收。
+	if len(host.closeOnce) != 1 {
+		t.Fatalf("emit 失败后应恰好 close 宿主流一次：%v", host.closeOnce)
 	}
 }
 

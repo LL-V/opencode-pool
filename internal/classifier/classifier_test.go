@@ -169,3 +169,35 @@ func TestQuotaWindowDefaultReset(t *testing.T) {
 		t.Fatalf("未识别窗口默认应≈5h：got %v", d3)
 	}
 }
+
+// 配置的并发关键词应参与强信号判定（词表可运维调整）。
+func TestClassifyWithCustomKeywords(t *testing.T) {
+	body := []byte(`{"error":{"type":"rate_limit_error","message":"shared pool saturated"}}`)
+	if got := ClassifyWithKeywords(429, body, nil, []string{"shared pool"}); got.Category != CategoryConcurrency {
+		t.Fatalf("自定义关键词应判并发：%+v", got)
+	}
+	if got := Classify(429, body, nil); got.Category == CategoryConcurrency {
+		t.Fatalf("默认词表不应命中：%+v", got)
+	}
+}
+
+// reset 时间解析：RFC3339 / HTTP-date / unix / 自然语言 都应可用。
+func TestResetFormats(t *testing.T) {
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	cases := []struct{ raw string; want time.Time }{
+		{"2026-11-21T17:00:00Z", time.Date(2026, 11, 21, 17, 0, 0, 0, time.UTC)},
+		{"Sat, 21 Nov 2026 17:00:00 GMT", time.Date(2026, 11, 21, 17, 0, 0, 0, time.UTC)},
+		{"1795280400", time.Unix(1795280400, 0)},
+		{"resets in 4h 30m", now.Add(4*time.Hour + 30*time.Minute)},
+		{"Resets in 4 minutes", now.Add(4 * time.Minute)},
+	}
+	for _, c := range cases {
+		got, ok := parseResetAt(c.raw, now)
+		if !ok || !got.Equal(c.want) {
+			t.Fatalf("parseResetAt(%q)=%v,%v want %v", c.raw, got, ok, c.want)
+		}
+	}
+	if _, ok := parseResetAt("not a date", now); ok {
+		t.Fatal("垃圾输入应失败")
+	}
+}

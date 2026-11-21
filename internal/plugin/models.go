@@ -25,20 +25,44 @@ func modelInfos(ids []string) []pluginapi.ModelInfo {
 	return out
 }
 
-// fetchModelsList pulls {base}/models through the host transport using the
-// first available account credential; returns nil on any failure.
-func (p *Plugin) fetchModelsList() []string {
+// probeTimeout bounds plugin-initiated /models and /usage calls so a hung
+// upstream cannot block host registration/model discovery forever.
+const probeTimeout = 8 * time.Second
+
+// doProbe runs one upstream call through the host transport with a deadline.
+// The host transport callback itself is not cancellable, so the goroutine may
+// finish later; the caller stops waiting at the deadline.
+func (p *Plugin) doProbe(req pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error) {
+	type result struct {
+		resp pluginapi.HTTPResponse
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		resp, err := p.bridge.Do(context.Background(), req, "")
+		ch <- result{resp, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.resp, r.err
+	case <-time.After(probeTimeout):
+		return pluginapi.HTTPResponse{}, context.DeadlineExceeded
+	}
+}
+
+// fetchModelsList pulls {base}/models through the host transport with the
+// given credential; returns nil on any failure.
+func (p *Plugin) fetchModelsList(key, base string) []string {
 	if p.bridge == nil {
 		return nil
 	}
-	key := p.firstAccountKey()
 	hdrs := map[string][]string{"User-Agent": {p.config().UpstreamUserAgent}}
 	if key != "" {
 		hdrs["Authorization"] = []string{"Bearer " + key}
 	}
-	resp, err := p.bridge.Do(context.Background(), pluginapi.HTTPRequest{
-		Method: "GET", URL: upstream.Join("", "models"), Headers: hdrs,
-	}, "")
+	resp, err := p.doProbe(pluginapi.HTTPRequest{
+		Method: "GET", URL: upstream.Join(base, "models"), Headers: hdrs,
+	})
 	if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil
 	}
@@ -59,30 +83,55 @@ func (p *Plugin) fetchModelsList() []string {
 	return ids
 }
 
-// firstAccountKey fetches one opencode-go auth document for its api_key.
-func (p *Plugin) firstAccountKey() string {
+// firstAccount returns one opencode-go credential's key and base_url.
+func (p *Plugin) firstAccount() (key, base string) {
 	files, err := p.bridge.AuthList()
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	for _, f := range files {
-		if f.Provider != ProviderID || f.ID == "" {
+		if f.Provider != ProviderID || f.AuthIndex == "" {
 			continue
 		}
-		raw, err := p.bridge.AuthGet(f.ID)
+		raw, err := p.bridge.AuthGet(f.AuthIndex)
 		if err != nil {
 			continue
 		}
-		if key := parseStorage(raw).APIKey; key != "" {
-			return key
+		st := parseStorage(raw)
+		if st.APIKey != "" {
+			return st.APIKey, st.BaseURL
 		}
 	}
-	return ""
+	return "", ""
+}
+
+// modelsStaticTTL caches the provider-wide catalog (model.static is polled by
+// the host and must not hit the network on every call).
+const modelsStaticTTL = 5 * time.Minute
+
+// staticModels returns the cached provider catalog or refetches it.
+func (p *Plugin) staticModels() []string {
+	p.modelsMu.Lock()
+	if p.modelsIDs != nil && time.Since(p.modelsAt) < modelsStaticTTL {
+		ids := p.modelsIDs
+		p.modelsMu.Unlock()
+		return ids
+	}
+	p.modelsMu.Unlock()
+	key, base := p.firstAccount()
+	ids := p.fetchModelsList(key, base)
+	if len(ids) == 0 {
+		return nil
+	}
+	p.modelsMu.Lock()
+	p.modelsIDs, p.modelsAt = ids, time.Now()
+	p.modelsMu.Unlock()
+	return ids
 }
 
 // modelsStatic serves model.static (provider catalog).
 func (p *Plugin) modelsStatic(request []byte) ([]byte, error) {
-	ids := p.fetchModelsList()
+	ids := p.staticModels()
 	if len(ids) == 0 {
 		ids = builtinModels
 	}
@@ -102,7 +151,11 @@ func (p *Plugin) modelsForAuth(request []byte) ([]byte, error) {
 	cached := p.store.ModelsCache(req.AuthID)
 	ids := cached
 	if len(ids) == 0 || !p.store.ModelsCacheFresh(req.AuthID, modelsCacheTTL) {
-		ids = p.fetchModelsList()
+		st := parseStorage(req.StorageJSON)
+		ids = p.fetchModelsList(st.APIKey, st.BaseURL)
+		if len(ids) == 0 {
+			ids = p.staticModels() // provider-wide fallback
+		}
 	}
 	if len(ids) == 0 {
 		ids = builtinModels
@@ -115,4 +168,7 @@ func (p *Plugin) modelsForAuth(request []byte) ([]byte, error) {
 // InvalidateModelsCache drops a per-account catalog (model_not_found hook).
 func (p *Plugin) InvalidateModelsCache(authID string) {
 	p.store.SetModelsCache(authID, nil, time.Now())
+	p.modelsMu.Lock()
+	p.modelsIDs, p.modelsAt = nil, time.Time{}
+	p.modelsMu.Unlock()
 }

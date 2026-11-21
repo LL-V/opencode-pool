@@ -81,7 +81,11 @@ func Pick(in Input, deps Deps) Decision {
 		if er := deps.EarliestRecovery(); !er.IsZero() {
 			reason = fmt.Sprintf("earliest recovery %s", er.UTC().Format(time.RFC3339))
 		}
-		return Decision{Reject: true, RejectReason: reason}
+		// Host protocol: Reject is only honored when Handled is true
+		// (pluginhost/scheduler.go returns early on !Handled; conductor only
+		// reads Reject when handled). Handled=false here would silently fall
+		// back to the built-in picker and re-select a bad/purged account.
+		return Decision{Handled: true, Reject: true, RejectReason: reason}
 	}
 	sort.SliceStable(cands, func(i, j int) bool {
 		a, b := cands[i], cands[j]

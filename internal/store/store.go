@@ -251,11 +251,14 @@ func (s *Store) ObserveWindowSource(id, window, source string, usedPct float64, 
 		return
 	}
 	w.UsedPct, w.SeenAt = usedPct, now
-	if sourceRank(source) >= sourceRank(w.Source) {
-		w.Source = source
-	}
 	if until.After(w.Until) {
+		// 截止时间由本观测确立 → Source 必须跟着它走。否则一个低权威
+		// 429 延长了已过期窗口，却保留 Source=api，后续真实 /usage 的
+		// 更早 reset 会被误判为漂移拒绝，账号被多封 5h/7d。
 		w.Until = until
+		w.Source = source
+	} else if sourceRank(source) >= sourceRank(w.Source) {
+		w.Source = source
 	}
 }
 
@@ -425,11 +428,22 @@ func (s *Store) Reconcile(live map[string]bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	changed := false
+	doomedBindings := map[string]bool{}
 	for id := range s.st.Accounts {
 		if !live[id] || s.st.Purged[id] {
 			delete(s.st.Accounts, id)
+			delete(s.inflight, id)
+			for sid, b := range s.st.Bindings {
+				if b != nil && b.AuthID == id {
+					delete(s.st.Bindings, sid)
+					doomedBindings[sid] = true
+				}
+			}
 			changed = true
 		}
+	}
+	if len(doomedBindings) > 0 {
+		s.bindingLRU = dropLRU(s.bindingLRU, doomedBindings)
 	}
 	for id := range live {
 		if s.st.Purged[id] {
@@ -443,6 +457,37 @@ func (s *Store) Reconcile(live map[string]bool) {
 	if changed {
 		s.st.Generation++
 	}
+}
+
+// PruneBindings drops expired session bindings and their LRU entries.
+func (s *Store) PruneBindings(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	doomed := map[string]bool{}
+	for sid, b := range s.st.Bindings {
+		if b == nil || now.Sub(b.LastSeen) > BindingTTL {
+			delete(s.st.Bindings, sid)
+			doomed[sid] = true
+		}
+	}
+	if len(doomed) > 0 {
+		s.bindingLRU = dropLRU(s.bindingLRU, doomed)
+		s.st.Generation++
+	}
+}
+
+// BindingCounts returns live (non-expired) binding counts per auth id.
+func (s *Store) BindingCounts(now time.Time) map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	counts := make(map[string]int, len(s.st.Accounts))
+	for _, b := range s.st.Bindings {
+		if b == nil || now.Sub(b.LastSeen) > BindingTTL {
+			continue
+		}
+		counts[b.AuthID]++
+	}
+	return counts
 }
 
 // Flush atomically writes state.json (0600) into the store dir.
@@ -461,11 +506,33 @@ func (s *Store) Flush() error {
 		return err
 	}
 	path := filepath.Join(s.dir, "state.json")
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+	f, err := os.CreateTemp(s.dir, "state-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmp := f.Name()
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, err := f.Write(raw); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil { // 掉电后也要保住最后一份状态
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	ok = true
+	return nil
 }
 
 // Load reads a persisted store (inflight starts at zero by design). The
@@ -490,6 +557,25 @@ func Load(path string) (*Store, error) {
 	if st.Purged == nil {
 		st.Purged = map[string]bool{}
 	}
+	for id, acc := range st.Accounts {
+		if acc == nil {
+			delete(st.Accounts, id)
+			continue
+		}
+		if acc.Windows == nil {
+			acc.Windows = map[string]*Window{}
+		}
+		for name, w := range acc.Windows {
+			if w == nil {
+				delete(acc.Windows, name)
+			}
+		}
+	}
+	for sid, b := range st.Bindings {
+		if b == nil {
+			delete(st.Bindings, sid)
+		}
+	}
 	sids := make([]string, 0, len(st.Bindings))
 	for sid, b := range st.Bindings {
 		if b != nil {
@@ -513,6 +599,9 @@ func Load(path string) (*Store, error) {
 // stop. Without a production Flush call site the atomic-persist contract
 // never fires and restarts lose every window/binding/learned limit.
 func (s *Store) StartAutoFlush(interval time.Duration) (stop func()) {
+	if interval <= 0 {
+		interval = 5 * time.Second // time.NewTicker panics on non-positive
+	}
 	var once sync.Once
 	done := make(chan struct{})
 	exited := make(chan struct{})
@@ -523,8 +612,10 @@ func (s *Store) StartAutoFlush(interval time.Duration) (stop func()) {
 		for {
 			select {
 			case <-ticker.C:
+				s.PruneBindings(time.Now())
 				_ = s.Flush()
 			case <-done:
+				s.PruneBindings(time.Now())
 				_ = s.Flush()
 				return
 			}

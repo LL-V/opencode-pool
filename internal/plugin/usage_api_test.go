@@ -41,8 +41,8 @@ func TestParseUsageResponse(t *testing.T) {
 func TestMaskKey(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"oc_sk_sample111111_Aaaaaaaaaaaaaaaaaa_Bbbbbbbbbbbbbbbb", "oc_sk_sample…bbbb"},
-		{"short", "sh…rt"},
-		{"ab", "ab"},
+		{"short", "s…t"},
+		{"ab", "••••"},
 		{"", ""},
 	}
 	for _, c := range cases {
@@ -79,8 +79,9 @@ func TestAccountHasNameAndMaskedKey(t *testing.T) {
 		t.Fatal("应经 host.auth.save 物化")
 	}
 	saved := host.saved[0]
-	if saved["Label"] != "demo@example.com" {
-		t.Fatalf("AuthData.Label：got %v", saved["Label"])
+	raw, _ := saved["json"].(json.RawMessage)
+	if !strings.Contains(string(raw), `"label":"demo@example.com"`) || !strings.Contains(string(raw), `"name":"demo@example.com"`) {
+		t.Fatalf("auth 文件应含账户名与 label：%s", raw)
 	}
 	// 详情也带脱敏 key
 	detail := p.HandleManagement("GET", "/account", url.Values{"id": []string{created.ID}}, nil)

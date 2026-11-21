@@ -67,14 +67,17 @@ func (p *Plugin) authRefresh(request []byte) ([]byte, error) {
 	})
 }
 
-// maskKey renders an API key recognizable but safe: keep the recognizable
-// prefix and the last 4 characters.
+// maskKey renders an API key recognizable but safe: keep a short prefix and
+// the last 4 characters. Very short keys are fully masked.
 func maskKey(key string) string {
+	if key == "" {
+		return ""
+	}
 	if len(key) <= 4 {
-		return key
+		return "••••"
 	}
 	if len(key) <= 10 {
-		return key[:2] + "…" + key[len(key)-2:]
+		return key[:1] + "…" + key[len(key)-1:]
 	}
 	return key[:12] + "…" + key[len(key)-4:]
 }

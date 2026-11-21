@@ -64,8 +64,8 @@ func TestRejectWhenAllBad(t *testing.T) {
 		earliestRecovery: ts(120),
 	}
 	got := Pick(Input{Candidates: []Candidate{cand("a", 0), cand("b", 0)}, Now: ts(0)}, d)
-	if !got.Reject {
-		t.Fatalf("全部 bad 应 Reject：got %+v", got)
+	if !got.Reject || !got.Handled {
+		t.Fatalf("全部 bad 应 Handled+Reject（宿主只在 Handled 时读取 Reject）：got %+v", got)
 	}
 	if !strings.Contains(got.RejectReason, "1763") && !strings.Contains(got.RejectReason, ":") {
 		t.Fatalf("reason 应含最早恢复时间：%q", got.RejectReason)
