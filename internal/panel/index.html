@@ -3,85 +3,104 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OpenCode</title>
+<title>OpenCode Pool</title>
 <style>
-:root{
-  --bg:#ffffff;--fg:#18181b;--muted:#71717a;--line:#e5e5e5;
-  --hover:#f4f4f5;--accent:#5e6ad2;--accent-ink:#ffffff;
-  --green:#22c55e;--red:#ef4444;--orange:#f59e0b;--yellow:#eab308;--gray:#a1a1aa;
-  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-}
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--fg);font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
-main{max-width:860px;margin:0 auto;padding:48px 24px}
-h1{font-size:13px;font-weight:600;color:var(--muted);letter-spacing:.08em;margin-bottom:16px}
-table{width:100%;border-collapse:collapse}
-th{font-weight:500;color:var(--muted);text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);font-size:12px}
-td{padding:9px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
-tr.row{cursor:pointer}
-tr.row:hover,tr.row.sel{background:var(--hover)}
-td.num,th.num{text-align:right;font-family:var(--mono);font-size:12px}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:2px;vertical-align:middle}
-.dot.green{background:var(--green)}.dot.red{background:var(--red)}.dot.orange{background:var(--orange)}
-.dot.yellow{background:var(--yellow)}.dot.gray{background:var(--gray)}
-.dot.hollow{background:transparent;border:2px solid var(--red)}
-.bar{display:inline-block;width:72px;height:4px;background:var(--line);border-radius:2px;overflow:hidden;vertical-align:middle;margin-right:8px}
-.bar>i{display:block;height:100%;border-radius:2px}
-.actions{opacity:0;white-space:nowrap}
-tr.row:hover .actions,tr.row.sel .actions,.actions:focus-within{opacity:1}
-.actions button{border:0;background:none;color:var(--muted);font:inherit;cursor:pointer;padding:2px 6px;border-radius:4px}
-.actions button:hover{background:var(--hover);color:var(--fg)}
-.actions button.danger:hover{color:var(--red)}
-.add{border:0;background:none;color:var(--accent);font:inherit;cursor:pointer;padding:9px 8px}
-.empty{padding:32px 8px;color:var(--muted)}
-.skel td{color:transparent;background:linear-gradient(90deg,var(--hover),var(--line),var(--hover));background-size:200% 100%;animation:s 1s linear infinite;border-radius:4px}
-@keyframes s{to{background-position:-200% 0}}
-aside{position:fixed;top:0;right:-420px;width:400px;height:100%;background:var(--bg);border-left:1px solid var(--line);padding:24px;transition:right .15s ease;overflow:auto}
-aside.open{right:0}
-aside h2{font-size:14px;font-weight:600;margin-bottom:16px}
-aside dl{display:grid;grid-template-columns:96px 1fr;row-gap:8px;font-size:12px}
-aside dt{color:var(--muted)}aside dd{font-family:var(--mono)}
-aside .acts{margin-top:20px;display:flex;gap:8px}
-aside .acts button{flex:1;border:1px solid var(--line);background:var(--bg);font:inherit;padding:6px;border-radius:6px;cursor:pointer}
-aside .acts button:hover{border-color:var(--accent);color:var(--accent)}
-.keybar{display:none;gap:8px;margin-bottom:16px}
-.keybar.show{display:flex}
-.keybar input{flex:1;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:12px var(--mono)}
-.keybar button{border:0;background:var(--accent);color:var(--accent-ink);border-radius:6px;padding:6px 14px;font:inherit;cursor:pointer}
-.dash{color:var(--muted)}
-#confirm{position:fixed;inset:0;background:rgba(24,24,27,.3);display:none;align-items:center;justify-content:center}
-#confirm.show{display:flex}
-#confirm>div{background:var(--bg);border-radius:10px;padding:20px;width:280px}
-#confirm button{width:100%;border:0;border-radius:6px;padding:8px;font:inherit;cursor:pointer;margin-top:8px}
-#confirm .c{background:var(--hover)}#confirm .d{background:var(--red);color:#fff}
+:root{--bg:#fafafa;--card:#fff;--fg:#111;--muted:#6b7280;--line:#e5e7eb;--accent:#2563eb;--green:#16a34a;--orange:#d97706;--red:#dc2626;--yellow:#ca8a04;--gray:#9ca3af;--hover:#f0f4ff}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;padding:28px clamp(16px,4vw,48px)}
+header{display:flex;align-items:center;gap:14px;margin-bottom:22px;flex-wrap:wrap}
+h1{font-size:19px;font-weight:650;letter-spacing:-.01em}
+h1 small{color:var(--muted);font-weight:400;font-size:12px;margin-left:8px}
+#add{margin-left:auto;border:0;background:var(--accent);color:#fff;font:600 13px inherit;padding:8px 16px;border-radius:8px;cursor:pointer}
+#add:hover{filter:brightness(1.08)}
+#error{display:none;background:#fef2f2;border:1px solid #fecaca;color:var(--red);border-radius:8px;padding:9px 14px;margin-bottom:16px;font-size:13px;white-space:pre-wrap}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;cursor:pointer;transition:border-color .15s}
+.card:hover{border-color:#c7d2fe}
+.card.sel{border-color:var(--accent);box-shadow:0 0 0 3px #dbeafe}
+.chead{display:flex;align-items:center;gap:9px}
+.dot{width:9px;height:9px;border-radius:50%;flex:none;background:var(--green)}
+.dot.orange{background:var(--orange)}.dot.red{background:var(--red)}.dot.yellow{background:var(--yellow)}.dot.gray{background:var(--gray)}.dot.hollow{background:transparent;border:2px solid var(--gray)}
+.aname{font-weight:600;font-size:14.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.akey{color:var(--muted);font-size:11.5px;font-family:ui-monospace,Consolas,monospace;margin-left:auto;flex:none}
+.wins{margin:13px 0 11px;display:flex;flex-direction:column;gap:7px}
+.win{display:grid;grid-template-columns:64px 1fr 76px;align-items:center;gap:10px;font-size:12px}
+.win .wn{color:var(--muted)}
+.win .bar{height:6px;background:#eef2f7;border-radius:3px;overflow:hidden}
+.win .bar i{display:block;height:100%;border-radius:3px;background:var(--accent)}
+.win .wv{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding-top:11px;border-top:1px solid var(--line)}
+.stat b{display:block;font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+.stat span{font-size:10.5px;color:var(--muted)}
+.card .ops{display:flex;gap:4px;margin-top:11px;opacity:0;transition:opacity .15s}
+.card:hover .ops,.card:focus-within .ops{opacity:1}
+.ops button{border:0;background:none;color:var(--muted);font:12px inherit;cursor:pointer;padding:3px 8px;border-radius:5px}
+.ops button:hover{background:var(--hover);color:var(--accent)}
+.ops button.danger:hover{color:var(--red)}
+.empty{color:var(--muted);text-align:center;padding:56px 0;font-size:14px}
+#drawer{position:fixed;top:0;right:-420px;width:400px;max-width:92vw;height:100%;background:var(--card);border-left:1px solid var(--line);transition:right .2s;overflow-y:auto;padding:22px 24px;box-shadow:-8px 0 32px rgba(0,0,0,.05)}
+#drawer.open{right:0}
+#drawer h2{font-size:16px;font-weight:650;margin-bottom:4px;word-break:break-all}
+#drawer .sub{color:var(--muted);font-size:12px;margin-bottom:16px;font-family:ui-monospace,monospace}
+dl{display:grid;grid-template-columns:96px 1fr;gap:7px 12px;font-size:13px}
+dt{color:var(--muted)}dd{font-variant-numeric:tabular-nums;word-break:break-all}
+#drawer .acts{display:flex;gap:8px;margin-top:20px}
+#drawer .acts button{flex:1;border:1px solid var(--line);background:var(--card);font:inherit;padding:7px;border-radius:7px;cursor:pointer}
+#drawer .acts button:hover{border-color:var(--accent);color:var(--accent)}
+#drawer .acts button.danger:hover{border-color:var(--red);color:var(--red)}
+#modal{position:fixed;inset:0;background:rgba(17,24,39,.32);display:none;align-items:center;justify-content:center}
+#modal.open{display:flex}
+#modal .box{background:var(--card);border-radius:14px;padding:22px;width:380px;max-width:92vw}
+#modal h3{font-size:15px;font-weight:650;margin-bottom:14px}
+#modal label{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
+#modal input{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font:13px ui-monospace,Consolas,monospace}
+#modal input:focus{outline:2px solid #bfdbfe;border-color:var(--accent)}
+#modal .mrow{display:flex;gap:8px;margin-top:18px}
+#modal .mrow button{flex:1;border-radius:8px;padding:9px;font:600 13px inherit;cursor:pointer}
+#mok{border:0;background:var(--accent);color:#fff}#mcancel{border:1px solid var(--line);background:var(--card)}
+#keybar{display:none;position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;border-radius:10px;padding:10px 14px;gap:8px;align-items:center}
+#keybar.show{display:flex}
+#keybar input{border:0;border-radius:6px;padding:7px 10px;font:13px ui-monospace,monospace;width:240px}
+#keybar button{border:0;background:var(--accent);color:#fff;border-radius:6px;padding:7px 13px;font:inherit;cursor:pointer}
+kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 5px;font-size:11px;background:var(--card)}
+#hint{color:var(--muted);font-size:11.5px;margin-top:10px}
 </style>
 </head>
 <body>
-<main>
-  <h1>OPENCODE</h1>
-  <div class="keybar" id="keybar">
-    <input id="key" type="password" spellcheck="false">
-    <button id="connect">连接</button>
-  </div>
-  <table><thead><tr><th></th><th>账号</th><th class="num">用量</th><th class="num">并发</th><th></th></tr></thead>
-  <tbody id="rows"></tbody></table>
-  <button class="add" id="add">＋ 账号</button>
-</main>
-<aside id="drawer"><div id="detail"></div></aside>
-<div id="confirm"><div>
-  <button class="c" id="c1">永久删除</button>
-  <button class="d" id="c2">永久删除</button>
+<header>
+  <h1>OpenCode 账号池<small id="sum"></small></h1>
+  <button id="add">＋ 添加账号</button>
+</header>
+<div id="error"></div>
+<div id="grid"></div>
+<div id="keybar"><input id="key" type="password" placeholder="管理密钥"><button id="connect">连接</button></div>
+<div id="drawer"><div id="detail"></div></div>
+<div id="modal"><div class="box">
+  <h3>添加账号</h3>
+  <label>账户名（邮箱）</label><input id="mname" placeholder="user@example.com" autocomplete="off">
+  <label>API Key</label><input id="mkey" placeholder="oc_sk_..." autocomplete="off">
+  <div class="mrow"><button id="mcancel">取消</button><button id="mok">添加</button></div>
 </div></div>
+<div id="hint"><kbd>j</kbd><kbd>k</kbd> 选择 · <kbd>Enter</kbd> 详情 · <kbd>e</kbd> 启停 · <kbd>r</kbd> 刷新 · <kbd>u</kbd> 恢复 · <kbd>x</kbd> 删除（<kbd>Shift</kbd>+<kbd>x</kbd> 彻底）</div>
 <script>
 "use strict";
-const $=s=>document.querySelector(s), API=location.pathname.replace(/\/status.*$/,"");
-let sel=null,t=null,data={accounts:[]};
+// JSON 端点挂在管理前缀下（resource 前缀只有 /status 外壳）。
+const API="/v0/management/plugins/opencode-pool";
+const $=s=>document.querySelector(s);
+let sel=null,timer=null,data={accounts:[]};
 const key=()=>localStorage.ocp_key||"";
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt=n=>n==null?"—":n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(1)+"k":String(n);
+function showErr(msg){const e=$("#error");e.textContent=msg;e.style.display=msg?"block":"none"}
 async function api(path,opt={}){
-  const r=await fetch(API+path,{...opt,headers:{...opt.headers,"X-Management-Key":key(),"Content-Type":"application/json"}});
-  if(r.status===401){$("#keybar").classList.add("show");throw 0}
-  if(!r.ok)throw r;
-  return r.json();
+  let r;
+  try{r=await fetch(API+path,{...opt,headers:{...opt.headers,"Authorization":"Bearer "+key(),"Content-Type":"application/json"}})}
+  catch(err){showErr("网络错误："+err.message+"  "+path);throw 0}
+  if(r.status===401){$("#keybar").classList.add("show");$("#key").focus();showErr("管理密钥无效（401）— 请在下方输入密钥");throw 0}
+  const text=await r.text();
+  if(!r.ok){let m=text;try{m=JSON.parse(text).error?.message||text}catch(_){ }
+    showErr("请求失败 "+r.status+" "+path+"\n"+m);throw r}
+  showErr("");return JSON.parse(text)
 }
 function dot(a){
   const w=a.windows||[],ex=w.some(x=>x.used_pct>=100&&new Date(x.until)>new Date());
@@ -90,82 +109,102 @@ function dot(a){
   if(w.some(x=>x.used_pct>=92))return"dot orange";
   if(a.verify_pending)return"dot yellow";
   if(a.enabled===false)return"dot gray";
-  return"dot green";
+  return"dot green"
 }
-function worst(a){const w=a.windows||[];return w.length?w.reduce((m,x)=>x.used_pct>(m?m.used_pct:-1)?x:m,null):null}
-function until(x){if(!x||x.used_pct<100)return"";const m=(new Date(x.until)-Date.now())/6e4;
-  return m<=0?"—":m<60?Math.ceil(m)+"m":Math.floor(m/60)+"h"+Math.ceil(m%60)+"m"}
-function barColor(p){return p>=100?"var(--red)":p>=92?"var(--orange)":"var(--accent)"}
+function untilTxt(x){if(!x||x.used_pct<100)return x?("重置 "+fmtT(x.until)):"";
+  const m=(new Date(x.until)-Date.now())/6e4;return m<=0?"即将重置":m<60?Math.ceil(m)+"m 后重置":Math.floor(m/60)+"h"+Math.ceil(m%60)+"m 后重置"}
+function fmtT(s){if(!s)return"—";const d=new Date(s);return d.toLocaleString()}
+function winRow(w){
+  const p=Math.min(w.used_pct??0,100),c=p>=100?"var(--red)":p>=92?"var(--orange)":"var(--accent)";
+  return`<div class="win"><span class="wn">${esc(w.window)}</span>
+  <span class="bar"><i style="width:${p}%;background:${c}"></i></span>
+  <span class="wv">${p>=100?"满":(w.used_pct??0).toFixed(0)+"%"} · ${untilTxt(w)}</span></div>`
+}
 function render(){
-  const tb=$("#rows");tb.innerHTML="";
-  if(!data.accounts.length&&$("#keybar").classList.contains("show")===false&&key()===""){
-    tb.innerHTML='<tr><td colspan="5" class="empty">没有账号</td></tr>';return;
-  }
-  for(const a of data.accounts){
-    const w=worst(a),p=w?Math.min(w.used_pct,100):null;
-    const tr=document.createElement("tr");tr.className="row"+(sel===a.id?" sel":"");
-    tr.dataset.id=a.id;
-    tr.innerHTML=`<td><span class="${dot(a)}"></span></td>
-      <td>${esc(a.label||a.id)}</td>
-      <td class="num">${p===null?'<span class="dash">—</span>':`<span class="bar"><i style="width:${p}%;background:${barColor(p)}"></i></span>${until(w)||p.toFixed(0)+"%"}`}</td>
-      <td class="num">${a.inflight??0}/${a.learned_concurrency_limit||"–"}</td>
-      <td class="actions"><button data-a="r">刷新</button><button data-a="u">恢复</button><button data-a="e">${a.enabled===false?"启用":"停用"}</button><button data-a="x" class="danger">删除</button></td>`;
-    tr.onclick=e=>{const b=e.target.closest("button");
+  const g=$("#grid");g.innerHTML="";
+  const acc=data.accounts||[];
+  $("#sum").textContent=acc.length?`${acc.length} 个账号 · ${acc.filter(a=>a.enabled!==false&&dot(a)==="dot green").length} 可用`:"";
+  if(!acc.length){g.innerHTML='<div class="empty">'+(key()?"没有账号 — 点右上角添加":"下方输入管理密钥连接")+"</div>";return}
+  for(const a of acc){
+    const d=document.createElement("div");
+    d.className="card"+(sel===a.id?" sel":"");d.dataset.id=a.id;d.tabIndex=0;
+    const wins=(a.windows&&a.windows.length)?a.windows.map(winRow).join(""):'<div class="win"><span class="wn">用量</span><span></span><span class="wv">暂无数据</span></div>';
+    d.innerHTML=`<div class="chead"><span class="${dot(a)}"></span><span class="aname">${esc(a.label||a.id)}</span><span class="akey">${esc(a.api_key_masked||"")}</span></div>
+    <div class="wins">${wins}</div>
+    <div class="stats">
+      <div class="stat"><b>${a.inflight??0}/${a.learned_concurrency_limit||"–"}</b><span>并发</span></div>
+      <div class="stat"><b>${fmt(a.usage?.requests)}</b><span>请求</span></div>
+      <div class="stat"><b>${fmt(a.usage?.input_tokens)}</b><span>输入 tok</span></div>
+      <div class="stat"><b>${fmt(a.usage?.output_tokens)}</b><span>输出 tok</span></div>
+    </div>
+    <div class="ops"><button data-a="r">刷新</button><button data-a="u">恢复</button><button data-a="e">${a.enabled===false?"启用":"停用"}</button><button data-a="x" class="danger">删除</button></div>`;
+    d.onclick=e=>{const b=e.target.closest("button");
       if(b){act(a,b.dataset.a,e);e.stopPropagation();return}
-      sel=sel===a.id?null:a.id;render();sel&&drawer(a)};
-    tb.appendChild(tr);
+      sel=sel===a.id?null:a.id;render();if(sel)drawer(a)};
+    g.appendChild(d)
   }
 }
 async function drawer(a){
-  const d=$("#detail");$("#drawer").classList.add("open");
-  let full=a;try{full=await api("/account?id="+encodeURIComponent(a.id))}catch(e){}
-  const ws=(full.windows||[]).map(w=>`<dt>${esc(w.window)}</dt><dd>${w.used_pct==null?"—":w.used_pct.toFixed(0)+"% · "+until(w)+" · "+w.source}</dd>`).join("");
-  d.innerHTML=`<h2>${esc(full.label||full.id)}</h2>
-  <dl>${ws}
-    <dt>请求</dt><dd>${(full.usage&&full.usage.requests)??0}</dd>
-    <dt>输入</dt><dd>${fmt(full.usage&&full.usage.input_tokens)}</dd>
-    <dt>输出</dt><dd>${fmt(full.usage&&full.usage.output_tokens)}</dd>
-    <dt>绑定</dt><dd>${full.bindings_count??0}</dd>
-    <dt>最近错误</dt><dd>${full.last_error?full.last_error.code+" · "+new Date(full.last_error.at).toLocaleString():"—"}</dd>
+  $("#detail").innerHTML="<h2>"+esc(a.label||a.id)+"</h2>";$("#drawer").classList.add("open");
+  let full=a;try{full=await api("/account?id="+encodeURIComponent(a.id))}catch(_){ }
+  const ws=(full.windows||[]).map(w=>`<dt>${esc(w.window)}</dt><dd>${(w.used_pct??0).toFixed(0)}% · 重置 ${fmtT(w.until)} · 来源 ${esc(w.source)}</dd>`).join("");
+  $("#detail").innerHTML=`<h2>${esc(full.label||full.id)}</h2><div class="sub">${esc(full.id)}<br>${esc(full.api_key_masked||"")}</div>
+  <dl>
+    <dt>状态</dt><dd>${esc(full.status)}${full.enabled===false?"（已停用）":""}</dd>
+    ${ws}
+    <dt>并发</dt><dd>${full.inflight??0} / 上限 ${full.learned_concurrency_limit||"未学习"}</dd>
+    <dt>请求数</dt><dd>${fmt(full.usage?.requests)}</dd>
+    <dt>输入</dt><dd>${fmt(full.usage?.input_tokens)}</dd>
+    <dt>输出</dt><dd>${fmt(full.usage?.output_tokens)}</dd>
+    <dt>最近使用</dt><dd>${fmtT(full.usage?.last_used_at)}</dd>
+    <dt>会话绑定</dt><dd>${full.bindings_count??0}</dd>
+    <dt>最近错误</dt><dd>${full.last_error?esc(full.last_error.code)+" · "+fmtT(full.last_error.at):"—"}</dd>
   </dl>
   <div class="acts"><button data-a="r">刷新</button><button data-a="u">恢复</button><button data-a="b">解绑</button><button data-a="x" class="danger">删除</button></div>`;
-  d.querySelectorAll("button").forEach(b=>b.onclick=e=>act(full,b.dataset.a,e,true));
+  $("#detail").querySelectorAll("button").forEach(b=>b.onclick=e=>act(full,b.dataset.a,e,true))
 }
-const fmt=n=>n==null?"—":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(1)+"k":n;
-const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 async function act(a,action,e,fromDrawer){
   e&&e.stopPropagation();
-  const id=encodeURIComponent(a.id);
   try{
-    if(action==="r")await api("/account/refresh",{method:"POST",body:JSON.stringify({id:a.id})});
-    if(action==="u")await api("/account/unblock",{method:"POST",body:JSON.stringify({id:a.id})});
-    if(action==="b")await api("/account/bindings/clear",{method:"POST",body:JSON.stringify({id:a.id})});
-    if(action==="e")await api("/account",{method:"PATCH",body:JSON.stringify({id:a.id,enabled:a.enabled===false})});
+    if(action==="r"){await api("/account/refresh",{method:"POST",body:JSON.stringify({id:a.id})})}
+    if(action==="u"){await api("/account/unblock",{method:"POST",body:JSON.stringify({id:a.id})})}
+    if(action==="b"){await api("/account/bindings/clear",{method:"POST",body:JSON.stringify({id:a.id})})}
+    if(action==="e"){await api("/account",{method:"PATCH",body:JSON.stringify({id:a.id,enabled:a.enabled===false})})}
     if(action==="x"){
-      if(e&&e.shiftKey){await api("/account?id="+id+"&purge=true",{method:"DELETE"});sel=null;$("#drawer").classList.remove("open")}
-      else{await api("/account?id="+id,{method:"DELETE"});sel=null;$("#drawer").classList.remove("open")}
+      if(e&&e.shiftKey){await api("/account?id="+encodeURIComponent(a.id)+"&purge=true",{method:"DELETE"})}
+      else{await api("/account?id="+encodeURIComponent(a.id),{method:"DELETE"})}
+      sel=null;$("#drawer").classList.remove("open")
     }
-    await load();
-  }catch(r){if(r&&r.status===409)await load()}
+    await load()
+  }catch(_){/* 错误已由 api() 显示 */}
 }
-async function load(){try{data=await api("/accounts")}catch(e){}render()}
-async function loop(){if(t)clearInterval(t);await load();t=setInterval(load,5000)}
+async function load(){try{data=await api("/accounts")}catch(_){ }render()}
+function loop(){if(timer)clearInterval(timer);(async()=>{await load()})();timer=setInterval(load,5000)}
 $("#connect").onclick=()=>{localStorage.ocp_key=$("#key").value;$("#keybar").classList.remove("show");loop()};
+$("#add").onclick=()=>{$("#modal").classList.add("open");$("#mname").focus()};
+$("#mcancel").onclick=()=>$("#modal").classList.remove("open");
+$("#modal").onclick=e=>{if(e.target.id==="modal")$("#modal").classList.remove("open")};
+$("#mok").onclick=async()=>{
+  const n=$("#mname").value.trim(),k=$("#mkey").value.trim();
+  if(!k){showErr("API Key 不能为空");return}
+  try{
+    await api("/accounts",{method:"POST",body:JSON.stringify({name:n,api_key:k})});
+    $("#modal").classList.remove("open");$("#mname").value="";$("#mkey").value="";await load()
+  }catch(_){/* 错误已显示，模态框保持打开让用户重试 */}
+};
 document.onkeydown=e=>{
+  if($("#modal").classList.contains("open")){if(e.key==="Escape")$("#modal").classList.remove("open");if(e.key==="Enter")$("#mok").click();return}
   if(e.target.tagName==="INPUT")return;
-  const rows=[...document.querySelectorAll("tr.row")];if(!rows.length)return;
-  const i=rows.findIndex(r=>r.classList.contains("sel"));
+  if(e.key==="Escape"){$("#drawer").classList.remove("open");return}
+  const cards=[...document.querySelectorAll(".card")];if(!cards.length)return;
+  const i=cards.findIndex(c=>c.classList.contains("sel"));
   const n=e.key==="j"?(i<0?0:i+1):e.key==="k"?(i<0?0:i-1):i;
-  if(e.key==="j"||e.key==="k"){rows[Math.min(Math.max(n,0),rows.length-1)].click();e.preventDefault()}
-  if(i>=0){const a=data.accounts.find(x=>x.id===rows[i].dataset.id);if(!a)return;
+  if(e.key==="j"||e.key==="k"){cards[Math.min(Math.max(n,0),cards.length-1)].click();e.preventDefault();return}
+  if(i>=0){const a=data.accounts.find(x=>x.id===cards[i].dataset.id);if(!a)return;
     if(e.key==="e")act(a,"e");if(e.key==="r")act(a,"r");if(e.key==="u")act(a,"u");
-    if(e.key==="x")act(a,"x");if(e.key==="Enter")rows[i].click()}
+    if(e.key==="x")act(a,"x");if(e.key==="Enter")cards[i].click()}
 };
-$("#add").onclick=async()=>{
-  const n=prompt("账户名（邮箱）");if(n===null)return;
-  const k=prompt("api_key");if(!k)return;
-  try{await api("/accounts",{method:"POST",body:JSON.stringify({name:n.trim(),api_key:k})});await load()}catch(r){}
-};
+if(!key())$("#keybar").classList.add("show");
 loop();
 </script>
 </body>

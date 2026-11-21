@@ -15,8 +15,9 @@ import (
 // PluginID namespaces the store, management routes, and registration.
 // ProviderID is the host model-routing namespace (opencode-go/* models).
 const (
-	PluginID   = "opencode-pool"
-	ProviderID = "opencode-go"
+	PluginID      = "opencode-pool"
+	ProviderID    = "opencode-go"
+	PluginVersion = "0.1.1"
 )
 
 // Plugin is the assembled capability set plus runtime state.
@@ -81,9 +82,10 @@ func (p *Plugin) buildRegistration() registration {
 	return registration{
 		SchemaVersion: 10,
 		Metadata: pluginapi.Metadata{
-			Name:    PluginID,
-			Version: "0.1.0",
-			Author:  "opencode-pool",
+			Name:            PluginID,
+			Version:         PluginVersion,
+			Author:          "LL-V",
+			GitHubRepository: "https://github.com/LL-V/opencode-pool",
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "upstream_user_agent", Type: pluginapi.ConfigFieldTypeString, Default: DefaultUserAgent, Description: "Upstream User-Agent override."},
 				{Name: "session_header_sources", Type: pluginapi.ConfigFieldTypeArray, Description: "Inbound session header sources in priority order."},
