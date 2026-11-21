@@ -82,9 +82,9 @@ func (p *Plugin) buildRegistration() registration {
 	return registration{
 		SchemaVersion: 10,
 		Metadata: pluginapi.Metadata{
-			Name:            PluginID,
-			Version:         PluginVersion,
-			Author:          "LL-V",
+			Name:             PluginID,
+			Version:          PluginVersion,
+			Author:           "LL-V",
 			GitHubRepository: "https://github.com/LL-V/opencode-pool",
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "upstream_user_agent", Type: pluginapi.ConfigFieldTypeString, Default: DefaultUserAgent, Description: "Upstream User-Agent override."},
