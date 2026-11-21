@@ -17,17 +17,19 @@ import (
 const (
 	PluginID      = "opencode-pool"
 	ProviderID    = "opencode-go"
-	PluginVersion = "0.1.3"
+	PluginVersion = "0.1.4"
 )
 
 // Plugin is the assembled capability set plus runtime state.
 type Plugin struct {
-	cfg       Config
-	bridge    *Bridge
-	store     *Store
-	dataDir   string
-	stopFlush func()
-	mu        sync.Mutex
+	cfg          Config
+	bridge       *Bridge
+	store        *Store
+	dataDir      string
+	stopFlush    func()
+	mu           sync.Mutex
+	usageFetchMu sync.Mutex
+	usageFetched map[string]time.Time // per-auth /usage pull throttle
 }
 
 // autoFlushInterval is the periodic state.json persist cadence.

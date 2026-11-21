@@ -24,8 +24,9 @@ h1 small{color:var(--muted);font-weight:400;font-size:12px;margin-left:8px}
 .aname{font-weight:600;font-size:14.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .akey{color:var(--muted);font-size:11.5px;font-family:ui-monospace,Consolas,monospace;margin-left:auto;flex:none}
 .wins{margin:13px 0 11px;display:flex;flex-direction:column;gap:7px}
-.win{display:grid;grid-template-columns:64px 1fr 76px;align-items:center;gap:10px;font-size:12px}
-.win .wn{color:var(--muted)}
+.win{display:grid;grid-template-columns:70px 1fr 108px;align-items:center;gap:10px;font-size:12px}
+.bar.empty{background:repeating-linear-gradient(45deg,#f1f5f9 0 6px,#e8edf3 6px 12px)}
+.win .wn{color:var(--muted);white-space:nowrap}
 .win .bar{height:6px;background:#eef2f7;border-radius:3px;overflow:hidden}
 .win .bar i{display:block;height:100%;border-radius:3px;background:var(--accent)}
 .win .wv{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
@@ -121,11 +122,17 @@ function dot(a){
 function untilTxt(x){if(!x||x.used_pct<100)return x?("重置 "+fmtT(x.until)):"";
   const m=(new Date(x.until)-Date.now())/6e4;return m<=0?"即将重置":m<60?Math.ceil(m)+"m 后重置":Math.floor(m/60)+"h"+Math.ceil(m%60)+"m 后重置"}
 function fmtT(s){if(!s)return"—";const d=new Date(s);return d.toLocaleString()}
-function winRow(w){
-  const p=Math.min(w.used_pct??0,100),c=p>=100?"var(--red)":p>=92?"var(--orange)":"var(--accent)";
-  return`<div class="win"><span class="wn">${esc(w.window)}</span>
-  <span class="bar"><i style="width:${p}%;background:${c}"></i></span>
-  <span class="wv">${p>=100?"满":(w.used_pct??0).toFixed(0)+"%"} · ${untilTxt(w)}</span></div>`
+const WIN_SLOTS=[["rolling","5小时额度"],["weekly","周限额"],["monthly","月限额"]];
+function winRows(a){
+  const m={};(a.windows||[]).forEach(w=>m[w.window]=w);
+  return WIN_SLOTS.map(([k,label])=>{
+    const w=m[k];
+    if(!w||w.used_pct==null)return`<div class="win"><span class="wn">${label}</span><span class="bar empty"></span><span class="wv">读取中</span></div>`;
+    const p=Math.min(w.used_pct,100),c=p>=100?"var(--red)":p>=92?"var(--orange)":"var(--accent)";
+    return`<div class="win"><span class="wn">${label}</span>
+    <span class="bar"><i style="width:${p}%;background:${c}"></i></span>
+    <span class="wv">${p>=100?"已满":w.used_pct.toFixed(0)+"%"} · ${untilTxt(w)}</span></div>`
+  }).join("")
 }
 function render(){
   const g=$("#grid");g.innerHTML="";
@@ -135,7 +142,7 @@ function render(){
   for(const a of acc){
     const d=document.createElement("div");
     d.className="card"+(sel===a.id?" sel":"");d.dataset.id=a.id;d.tabIndex=0;
-    const wins=(a.windows&&a.windows.length)?a.windows.map(winRow).join(""):'<div class="win"><span class="wn">用量</span><span></span><span class="wv">暂无数据</span></div>';
+    const wins=winRows(a);
     d.innerHTML=`<div class="chead"><span class="${dot(a)}"></span><span class="aname">${esc(a.label||a.id)}</span><span class="akey">${esc(a.api_key_masked||"")}</span></div>
     <div class="wins">${wins}</div>
     <div class="stats">
@@ -154,7 +161,8 @@ function render(){
 async function drawer(a){
   $("#detail").innerHTML="<h2>"+esc(a.label||a.id)+"</h2>";$("#drawer").classList.add("open");
   let full=a;try{full=await api("/account?id="+encodeURIComponent(a.id))}catch(_){ }
-  const ws=(full.windows||[]).map(w=>`<dt>${esc(w.window)}</dt><dd>${(w.used_pct??0).toFixed(0)}% · 重置 ${fmtT(w.until)} · 来源 ${esc(w.source)}</dd>`).join("");
+  const wmap={};(full.windows||[]).forEach(w=>wmap[w.window]=w);
+  const ws=WIN_SLOTS.map(([k,label])=>{const w=wmap[k];return w?`<dt>${label}</dt><dd>${(w.used_pct??0).toFixed(0)}% · 重置 ${fmtT(w.until)} · 来源 ${esc(w.source)}</dd>`:""}).join("");
   $("#detail").innerHTML=`<h2>${esc(full.label||full.id)}</h2><div class="sub">${esc(full.id)}<br>${esc(full.api_key_masked||"")}</div>
   <dl>
     <dt>状态</dt><dd>${esc(full.status)}${full.enabled===false?"（已停用）":""}</dd>

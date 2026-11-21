@@ -179,6 +179,7 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 		snap := p.store.Snapshot()
 		views := make([]accountView, 0, len(snap.Accounts))
 		for id, acc := range snap.Accounts {
+			p.refreshUsage(id) // 后台拉 /usage 填充窗口（节流），下次轮询可见
 			views = append(views, p.viewOf(id, acc, snap, false))
 		}
 		return mgmtJSON(map[string]any{"accounts": views})
@@ -193,6 +194,7 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 		if !ok {
 			return mgmtError(404, "account_not_found", "no such account")
 		}
+		p.refreshUsage(id)
 		return mgmtJSON(p.viewOf(id, acc, snap, true))
 
 	case method == "POST" && path == "/accounts":
@@ -458,4 +460,33 @@ func labelFromID(id string) string {
 		return tail[1][:4] + "…" + tail[1][len(tail[1])-4:]
 	}
 	return id
+}
+
+// refreshUsage pulls /usage in the background (throttled to one call per
+// account per minute) so window bars appear without waiting for a 429.
+func (p *Plugin) refreshUsage(id string) {
+	if p.bridge == nil {
+		return
+	}
+	p.usageFetchMu.Lock()
+	if p.usageFetched == nil {
+		p.usageFetched = map[string]time.Time{}
+	}
+	if t, ok := p.usageFetched[id]; ok && time.Since(t) < time.Minute {
+		p.usageFetchMu.Unlock()
+		return
+	}
+	p.usageFetched[id] = time.Now()
+	p.usageFetchMu.Unlock()
+	go func() {
+		raw, err := p.bridge.AuthGet(id)
+		if err != nil {
+			return
+		}
+		st := parseStorage(raw)
+		if st.APIKey == "" {
+			return
+		}
+		p.fetchAndApplyUsage(id, st.APIKey, st.BaseURL)
+	}()
 }
