@@ -62,8 +62,6 @@ dt{color:var(--muted)}dd{font-variant-numeric:tabular-nums;word-break:break-all}
 #keybar.show{display:flex}
 #keybar input{border:0;border-radius:6px;padding:7px 10px;font:13px ui-monospace,monospace;width:240px}
 #keybar button{border:0;background:var(--accent);color:#fff;border-radius:6px;padding:7px 13px;font:inherit;cursor:pointer}
-kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 5px;font-size:11px;background:var(--card)}
-#hint{color:var(--muted);font-size:11.5px;margin-top:10px}
 </style>
 </head>
 <body>
@@ -81,14 +79,23 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <label>API Key</label><input id="mkey" placeholder="oc_sk_..." autocomplete="off">
   <div class="mrow"><button id="mcancel">取消</button><button id="mok">添加</button></div>
 </div></div>
-<div id="hint"><kbd>j</kbd><kbd>k</kbd> 选择 · <kbd>Enter</kbd> 详情 · <kbd>e</kbd> 启停 · <kbd>r</kbd> 刷新 · <kbd>u</kbd> 恢复 · <kbd>x</kbd> 删除（<kbd>Shift</kbd>+<kbd>x</kbd> 彻底）</div>
 <script>
 "use strict";
 // JSON 端点挂在管理前缀下（resource 前缀只有 /status 外壳）。
 const API="/v0/management/plugins/opencode-pool";
 const $=s=>document.querySelector(s);
 let sel=null,timer=null,data={accounts:[]};
-const key=()=>localStorage.ocp_key||"";
+// CPAMP 登录（勾选记住密码）后密钥存在同源 localStorage["cli-proxy-auth"]，
+// 从 CPAMP 打开本页时自动复用，无需再输；仅读不到时才请求输入。
+const key=()=>{
+  if(localStorage.ocp_key)return localStorage.ocp_key;
+  try{
+    const a=JSON.parse(localStorage.getItem("cli-proxy-auth")||"");
+    const k=a&&a.state&&a.state.managementKey;
+    if(typeof k==="string"&&k)return k
+  }catch(_){ }
+  return ""
+};
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmt=n=>n==null?"—":n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(1)+"k":String(n);
 function showErr(msg){const e=$("#error");e.textContent=msg;e.style.display=msg?"block":"none"}
@@ -96,7 +103,7 @@ async function api(path,opt={}){
   let r;
   try{r=await fetch(API+path,{...opt,headers:{...opt.headers,"Authorization":"Bearer "+key(),"Content-Type":"application/json"}})}
   catch(err){showErr("网络错误："+err.message+"  "+path);throw 0}
-  if(r.status===401){$("#keybar").classList.add("show");$("#key").focus();showErr("管理密钥无效（401）— 请在下方输入密钥");throw 0}
+  if(r.status===401){$("#keybar").classList.add("show");$("#key").focus();showErr("需要管理密钥（401）— 输入 CPAMP 的管理密钥；在 CPAMP 登录页勾选「记住密码」后从这里打开可免输");throw 0}
   const text=await r.text();
   if(!r.ok){let m=text;try{m=JSON.parse(text).error?.message||text}catch(_){ }
     showErr("请求失败 "+r.status+" "+path+"\n"+m);throw r}
@@ -124,7 +131,7 @@ function render(){
   const g=$("#grid");g.innerHTML="";
   const acc=data.accounts||[];
   $("#sum").textContent=acc.length?`${acc.length} 个账号 · ${acc.filter(a=>a.enabled!==false&&dot(a)==="dot green").length} 可用`:"";
-  if(!acc.length){g.innerHTML='<div class="empty">'+(key()?"没有账号 — 点右上角添加":"下方输入管理密钥连接")+"</div>";return}
+  if(!acc.length){g.innerHTML='<div class="empty">'+(key()?"没有账号 — 点右上角添加":"需要管理密钥 — 在下方输入后连接")+"</div>";return}
   for(const a of acc){
     const d=document.createElement("div");
     d.className="card"+(sel===a.id?" sel":"");d.dataset.id=a.id;d.tabIndex=0;
@@ -204,7 +211,6 @@ document.onkeydown=e=>{
     if(e.key==="e")act(a,"e");if(e.key==="r")act(a,"r");if(e.key==="u")act(a,"u");
     if(e.key==="x")act(a,"x");if(e.key==="Enter")cards[i].click()}
 };
-if(!key())$("#keybar").classList.add("show");
 loop();
 </script>
 </body>
