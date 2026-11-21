@@ -197,7 +197,7 @@ func TestExecuteUsesSourceFormatEndpoint(t *testing.T) {
 	host.mu.Lock()
 	url := host.lastURL
 	host.mu.Unlock()
-	if !strings.HasSuffix(url, "/chat/completions") {
+	if url != "https://opencode.ai/inference/go/openai/v1/chat/completions" {
 		t.Fatalf("应按 SourceFormat=openai 选端点：%q", url)
 	}
 }

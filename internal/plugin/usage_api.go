@@ -13,7 +13,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-// usageWindow is one window observation parsed from /zen/go/v1/usage.
+// usageWindow is one window observation parsed from /inference/go/v1/usage.
 type usageWindow = store.Window
 
 // parseUsageResponse decodes the real OpenCode Go usage payload:
@@ -84,7 +84,7 @@ func (p *Plugin) fetchAndApplyUsage(authID, apiKey, baseURL string) bool {
 	}
 	resp, err := p.doProbe(pluginapi.HTTPRequest{
 		Method: "GET",
-		URL:    upstream.Join(baseURL, "usage"),
+		URL:    upstream.UsageURL(baseURL),
 		Headers: http.Header{
 			"User-Agent":    []string{p.config().UpstreamUserAgent},
 			"Authorization": []string{"Bearer " + apiKey},

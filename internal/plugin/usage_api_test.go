@@ -10,7 +10,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 )
 
-// 真实 /zen/go/v1/usage 响应形态（2026-11-21 实测）
+// 真实 Go 用量响应形态（2026-11-21 实测）
 const realUsageBody = `{"usage":{"rolling":{"status":"ok","percent":41,"resetsAt":"2026-11-21T07:12:21.287Z"},"weekly":{"status":"ok","percent":12,"resetsAt":"2026-11-23T00:00:00.000Z"},"monthly":{"status":"limited","percent":100,"resetsAt":"2026-12-20T22:32:56.000Z"}}}`
 
 func TestParseUsageResponse(t *testing.T) {

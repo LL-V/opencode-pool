@@ -61,7 +61,7 @@ func (p *Plugin) fetchModelsList(key, base string) []string {
 		hdrs["Authorization"] = []string{"Bearer " + key}
 	}
 	resp, err := p.doProbe(pluginapi.HTTPRequest{
-		Method: "GET", URL: upstream.Join(base, "models"), Headers: hdrs,
+		Method: "GET", URL: upstream.ModelsURL(base), Headers: hdrs,
 	})
 	if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil

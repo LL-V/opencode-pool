@@ -17,7 +17,7 @@ import (
 const (
 	PluginID      = "opencode-pool"
 	ProviderID    = "opencode-go"
-	PluginVersion = "0.2.5"
+	PluginVersion = "0.2.6"
 )
 
 // Plugin is the assembled capability set plus runtime state.

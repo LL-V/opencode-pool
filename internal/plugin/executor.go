@@ -49,17 +49,8 @@ func (p *Plugin) resolveSession(hdrs http.Header, body []byte) string {
 	return session.ResolveWithSources(hdrs, body, p.config().SessionHeaderSources)
 }
 
-// endpointFor maps the negotiated format onto the upstream path.
-func endpointFor(format string) string {
-	switch format {
-	case "claude":
-		return "messages"
-	case "openai-response":
-		return "responses"
-	default:
-		return "chat/completions"
-	}
-}
+// (endpoint paths live in internal/upstream: /openai/v1/... and
+// /anthropic/v1/... under the Go plan base).
 
 // applyOutboundHeaders rewrites User-Agent (delete all case variants, then
 // set) and guarantees x-opencode-session presence.
@@ -235,7 +226,7 @@ func (p *Plugin) execute(request []byte, stream bool) ([]byte, error) {
 	} else {
 		hdrs.Set("Authorization", "Bearer "+st.APIKey)
 	}
-	url := upstream.Join(st.BaseURL, endpointFor(reqFormat))
+	url := upstream.Endpoint(st.BaseURL, reqFormat)
 
 	ctx := context.Background()
 	if stream {

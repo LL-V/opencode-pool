@@ -57,7 +57,7 @@ curl -X POST http://127.0.0.1:8317/v8/plugins/store/opencode-pool/install \
 
 ## 上游
 
-默认 `https://opencode.ai/zen/go/v1`（OpenCode Zen 订阅网关）。账号数据独立按 key 存储在插件数据目录，重启不丢。
+默认 Go 套餐 base `https://opencode.ai/inference/go`，按 API 自动拼接 `/openai/v1/chat/completions`、`/openai/v1/responses`、`/anthropic/v1/messages`（官方 2026-11 文档；旧 `/zen/go` base 会自动迁移）。账号数据独立按 key 存储在插件数据目录，重启不丢。
 
 ## 本地开发
 
