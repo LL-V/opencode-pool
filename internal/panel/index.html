@@ -3,221 +3,252 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OpenCode Pool</title>
+<title>OpenCode 账号池</title>
 <style>
-:root{--bg:#fafafa;--card:#fff;--fg:#111;--muted:#6b7280;--line:#e5e7eb;--accent:#2563eb;--green:#16a34a;--orange:#d97706;--red:#dc2626;--yellow:#ca8a04;--gray:#9ca3af;--hover:#f0f4ff}
+:root{
+  color-scheme:light;
+  --canvas:#f5f4f1;--surface:#fff;--sunken:#f0efec;--line:#e6e5e0;--line-2:#cfcfc9;
+  --text:#15181b;--muted:#4e545b;--faint:#687078;
+  --ok:#1a6b3f;--ok-bg:#e6f3ec;--warn:#8f6212;--warn-bg:#f8f0dd;
+  --danger:#d03b3b;--danger-bg:#fbebe9;--info:#1c4f6e;--info-bg:#e8eff4;
+  --neutral:#5a5f66;--neutral-bg:#eceded;--accent:#2f6fed;--accent-bg:#eef3fe;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  --r-card:10px;--r-ctrl:7px;--r-badge:6px;
+  --shadow:0 1px 2px rgba(28,26,20,.05),0 8px 24px rgba(28,26,20,.06);
+}
 *{box-sizing:border-box;margin:0}
-body{background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;padding:28px clamp(16px,4vw,48px)}
-header{display:flex;align-items:center;gap:14px;margin-bottom:22px;flex-wrap:wrap}
-h1{font-size:19px;font-weight:650;letter-spacing:-.01em}
-h1 small{color:var(--muted);font-weight:400;font-size:12px;margin-left:8px}
-#add{margin-left:auto;border:0;background:var(--accent);color:#fff;font:600 13px inherit;padding:8px 16px;border-radius:8px;cursor:pointer}
-#add:hover{filter:brightness(1.08)}
-#error{display:none;background:#fef2f2;border:1px solid #fecaca;color:var(--red);border-radius:8px;padding:9px 14px;margin-bottom:16px;font-size:13px;white-space:pre-wrap}
-#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;cursor:pointer;transition:border-color .15s}
-.card:hover{border-color:#c7d2fe}
-.card.sel{border-color:var(--accent);box-shadow:0 0 0 3px #dbeafe}
-.chead{display:flex;align-items:center;gap:9px}
-.dot{width:9px;height:9px;border-radius:50%;flex:none;background:var(--green)}
-.dot.orange{background:var(--orange)}.dot.red{background:var(--red)}.dot.yellow{background:var(--yellow)}.dot.gray{background:var(--gray)}.dot.hollow{background:transparent;border:2px solid var(--gray)}
-.aname{font-weight:600;font-size:14.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.akey{color:var(--muted);font-size:11.5px;font-family:ui-monospace,Consolas,monospace;margin-left:auto;flex:none}
-.wins{margin:13px 0 11px;display:flex;flex-direction:column;gap:7px}
-.win{display:grid;grid-template-columns:70px 1fr 108px;align-items:center;gap:10px;font-size:12px}
-.bar.empty{background:repeating-linear-gradient(45deg,#f1f5f9 0 6px,#e8edf3 6px 12px)}
-.win .wn{color:var(--muted);white-space:nowrap}
-.win .bar{height:6px;background:#eef2f7;border-radius:3px;overflow:hidden}
-.win .bar i{display:block;height:100%;border-radius:3px;background:var(--accent)}
-.win .wv{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding-top:11px;border-top:1px solid var(--line)}
-.stat b{display:block;font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
-.stat span{font-size:10.5px;color:var(--muted)}
-.card .ops{display:flex;gap:2px;margin-top:10px}
-.ops button{border:0;background:#f3f4f6;color:var(--muted);font:12px inherit;cursor:pointer;padding:3px 10px;border-radius:5px}
-.ops button:hover{background:var(--hover);color:var(--accent)}
-#drawer .acts button{background:var(--card)}
-.ops button.danger:hover{color:var(--red)}
-.empty{color:var(--muted);text-align:center;padding:56px 0;font-size:14px}
-#drawer{position:fixed;top:0;right:-420px;width:400px;max-width:92vw;height:100%;background:var(--card);border-left:1px solid var(--line);transition:right .2s;overflow-y:auto;padding:22px 24px;box-shadow:-8px 0 32px rgba(0,0,0,.05)}
-#drawer.open{right:0}
-#drawer h2{font-size:16px;font-weight:650;margin-bottom:4px;word-break:break-all}
-#drawer .sub{color:var(--muted);font-size:12px;margin-bottom:16px;font-family:ui-monospace,monospace}
-dl{display:grid;grid-template-columns:96px 1fr;gap:7px 12px;font-size:13px}
-dt{color:var(--muted)}dd{font-variant-numeric:tabular-nums;word-break:break-all}
-#drawer .acts{display:flex;gap:8px;margin-top:20px}
-#drawer .acts button{flex:1;border:1px solid var(--line);background:var(--card);font:inherit;padding:7px;border-radius:7px;cursor:pointer}
-#drawer .acts button:hover{border-color:var(--accent);color:var(--accent)}
-#drawer .acts button.danger:hover{border-color:var(--red);color:var(--red)}
-#modal{position:fixed;inset:0;background:rgba(17,24,39,.32);display:none;align-items:center;justify-content:center}
-#modal.open{display:flex}
-#modal .box{background:var(--card);border-radius:14px;padding:22px;width:380px;max-width:92vw}
-#modal h3{font-size:15px;font-weight:650;margin-bottom:14px}
-#modal label{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
-#modal input{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font:13px ui-monospace,Consolas,monospace}
-#modal input:focus{outline:2px solid #bfdbfe;border-color:var(--accent)}
-#modal .mrow{display:flex;gap:8px;margin-top:18px}
-#modal .mrow button{flex:1;border-radius:8px;padding:9px;font:600 13px inherit;cursor:pointer}
-#mok{border:0;background:var(--accent);color:#fff}#mcancel{border:1px solid var(--line);background:var(--card)}
-#keybar{display:none;position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;border-radius:10px;padding:10px 14px;gap:8px;align-items:center}
+body{background:var(--canvas);color:var(--text);font:13.5px/1.55 var(--sans);padding:26px clamp(14px,4vw,52px) 60px}
+b,.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+/* ── 顶栏 ── */
+.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.top h1{font-size:17px;font-weight:650;letter-spacing:-.01em}
+.pills{display:flex;gap:6px;flex-wrap:wrap}
+.pill{display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-badge);padding:4px 10px;font-size:11.5px;color:var(--muted)}
+.pill b{font-size:15px;font-weight:650;color:var(--text)}
+.pill b.ok{color:var(--ok)} .pill b.warn{color:var(--warn)} .pill b.danger{color:var(--danger)}
+#add{margin-left:auto;border:0;background:var(--accent);color:#fff;font:600 12.5px var(--sans);padding:8px 16px;border-radius:var(--r-ctrl);cursor:pointer}
+#add:hover{filter:brightness(1.07)}
+/* ── 错误条 / 密钥条 ── */
+#err{display:none;background:var(--danger-bg);border:1px solid #f0cdc9;color:var(--danger);border-radius:var(--r-ctrl);padding:9px 14px;margin-bottom:14px;font-size:12.5px;white-space:pre-wrap}
+#keybar{display:none;position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;border-radius:10px;padding:10px 14px;gap:8px;align-items:center;box-shadow:0 8px 28px rgba(0,0,0,.25)}
 #keybar.show{display:flex}
-#keybar input{border:0;border-radius:6px;padding:7px 10px;font:13px ui-monospace,monospace;width:240px}
-#keybar button{border:0;background:var(--accent);color:#fff;border-radius:6px;padding:7px 13px;font:inherit;cursor:pointer}
+#keybar input{border:0;border-radius:6px;padding:7px 10px;font:12.5px var(--mono);width:250px}
+#keybar button{border:0;background:var(--accent);color:#fff;border-radius:6px;padding:7px 13px;font:600 12.5px var(--sans);cursor:pointer}
+/* ── 卡片网格 ── */
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(400px,100%),1fr));gap:12px;align-items:start}
+.acct{position:relative;background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--ok);border-radius:var(--r-card);box-shadow:var(--shadow);padding:13px 16px;transition:border-color 140ms}
+.acct[data-tone=warn]{border-left-color:var(--warn)}
+.acct[data-tone=danger]{border-left-color:var(--danger)}
+.acct[data-tone=neutral]{border-left-color:var(--neutral);box-shadow:none}
+.acct[data-tone=neutral] .quotas,.acct[data-tone=neutral] .foot{opacity:.72}
+.acct.sel{outline:2px solid var(--accent);outline-offset:1px}
+/* 头部 */
+.acct-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:26px}
+.acct-name{font:650 13.5px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:46%}
+.acct-key{font:11px var(--mono);color:var(--faint)}
+.badge{display:inline-flex;align-items:center;gap:5px;min-height:21px;padding:2px 8px;border-radius:var(--r-badge);font-size:11.5px;font-weight:600;background:var(--neutral-bg);color:var(--text);white-space:nowrap}
+.badge i{width:6px;height:6px;border-radius:50%;flex:none;background:currentColor}
+.badge.ok{background:var(--ok-bg);color:var(--ok)}
+.badge.warn{background:var(--warn-bg);color:var(--warn)}
+.badge.danger{background:var(--danger-bg);color:var(--danger)}
+.badge.info{background:var(--info-bg);color:var(--info)}
+.acts{margin-left:auto;display:flex;gap:2px}
+.acts button{border:0;background:none;color:var(--faint);font:11.5px var(--sans);cursor:pointer;padding:4px 8px;border-radius:5px}
+.acts button:hover{background:var(--sunken);color:var(--accent)}
+.acts button.del:hover{color:var(--danger)}
+/* 额度行 */
+.quotas{display:flex;flex-direction:column;gap:7px;margin-top:11px}
+.q{position:relative;min-height:32px;border-radius:6px;background:var(--sunken);padding:6px 11px 10px 14px;display:flex;justify-content:space-between;align-items:center;gap:12px;overflow:hidden}
+.q::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--q-accent,#c9cdd2)}
+.q .fill{position:absolute;left:0;bottom:0;height:3px;background:var(--q-accent,#c9cdd2);transition:width 140ms ease}
+.q-name{font-size:11.5px;font-weight:600;color:var(--muted);position:relative}
+.q-meta{position:relative;font-size:11.5px;color:var(--muted);display:flex;gap:6px;align-items:baseline;white-space:nowrap}
+.q-meta b{font-size:12.5px;font-weight:650;color:var(--text)}
+.q[data-tone=ok]{--q-accent:var(--ok)} .q[data-tone=warn]{--q-accent:var(--warn)} .q[data-tone=danger]{--q-accent:var(--danger)}
+.q[data-tone=danger] .q-meta{color:var(--danger)}
+.q.empty .q-meta b{color:var(--faint);font-weight:500}
+/* 底部 */
+.foot{display:flex;flex-wrap:wrap;gap:5px 14px;margin-top:11px;font-size:11.5px;color:var(--muted)}
+.foot b{font-weight:650;color:var(--text)}
+/* 展开 */
+details.more{margin-top:10px}
+details.more summary{cursor:pointer;font-size:11.5px;color:var(--faint);list-style:none;user-select:none}
+details.more summary::before{content:"▸ "} details.more[open] summary::before{content:"▾ "}
+.more-box{background:var(--sunken);border-radius:6px;padding:10px 12px;margin-top:6px}
+.more-box dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 12px}
+.more-box dt{font-size:10.5px;color:var(--faint)}
+.more-box dd{font:11.5px var(--mono);font-variant-numeric:tabular-nums;word-break:break-all}
+/* 空态 */
+.empty{grid-column:1/-1;text-align:center;padding:60px 0;color:var(--muted)}
+.empty h2{font-size:14.5px;font-weight:600;color:var(--text);margin-bottom:4px}
+/* 模态框 */
+#modal{position:fixed;inset:0;background:rgba(21,24,27,.34);display:none;align-items:center;justify-content:center;z-index:10}
+#modal.open{display:flex}
+#modal .box{background:var(--surface);border-radius:12px;padding:22px;width:390px;max-width:92vw;box-shadow:var(--shadow)}
+#modal h3{font-size:14.5px;font-weight:650;margin-bottom:6px}
+#modal p{font-size:11.5px;color:var(--muted);margin-bottom:8px}
+#modal label{display:block;font-size:11.5px;color:var(--muted);margin:12px 0 5px}
+#modal input{width:100%;border:1px solid var(--line-2);border-radius:var(--r-ctrl);padding:9px 11px;font:12.5px var(--mono);background:var(--surface)}
+#modal input:focus{outline:2px solid var(--accent-bg);border-color:var(--accent)}
+#modal .row{display:flex;gap:8px;margin-top:18px}
+#modal .row button{flex:1;border-radius:var(--r-ctrl);padding:9px;font:600 12.5px var(--sans);cursor:pointer}
+#mok{border:0;background:var(--accent);color:#fff}#mca{border:1px solid var(--line-2);background:var(--surface)}
 </style>
 </head>
 <body>
-<header>
-  <h1>OpenCode 账号池<small id="sum"></small></h1>
+<div class="top">
+  <h1>OpenCode 账号池</h1>
+  <div class="pills" id="pills"></div>
   <button id="add">＋ 添加账号</button>
-</header>
-<div id="error"></div>
+</div>
+<div id="err"></div>
 <div id="grid"></div>
-<div id="keybar"><input id="key" type="password" placeholder="管理密钥"><button id="connect">连接</button></div>
-<div id="drawer"><div id="detail"></div></div>
+<div id="keybar"><input id="key" type="password" placeholder="管理密钥"><button id="conn">连接</button></div>
 <div id="modal"><div class="box">
-  <h3>添加账号</h3>
+  <h3>添加账号</h3><p>上游使用 OpenCode Zen 订阅网关，填邮箱与 API Key。</p>
   <label>账户名（邮箱）</label><input id="mname" placeholder="user@example.com" autocomplete="off">
-  <label>API Key</label><input id="mkey" placeholder="oc_sk_..." autocomplete="off">
-  <div class="mrow"><button id="mcancel">取消</button><button id="mok">添加</button></div>
+  <label>API Key</label><input id="mkey" placeholder="oc_sk_…" autocomplete="off">
+  <div class="row"><button id="mca">取消</button><button id="mok">添加</button></div>
 </div></div>
 <script>
 "use strict";
-// JSON 端点挂在管理前缀下（resource 前缀只有 /status 外壳）。
 const API="/v0/management/plugins/opencode-pool";
 const $=s=>document.querySelector(s);
 let sel=null,timer=null,data={accounts:[]};
-// CPAMP 登录（勾选记住密码）后密钥存在同源 localStorage["cli-proxy-auth"]，
-// 从 CPAMP 打开本页时自动复用，无需再输；仅读不到时才请求输入。
-const key=()=>{
-  if(localStorage.ocp_key)return localStorage.ocp_key;
-  try{
-    const a=JSON.parse(localStorage.getItem("cli-proxy-auth")||"");
-    const k=a&&a.state&&a.state.managementKey;
-    if(typeof k==="string"&&k)return k
-  }catch(_){ }
-  return ""
-};
+const key=()=>{if(localStorage.ocp_key)return localStorage.ocp_key;
+  try{const a=JSON.parse(localStorage.getItem("cli-proxy-auth")||"");const k=a&&a.state&&a.state.managementKey;if(typeof k==="string"&&k)return k}catch(_){}return""};
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmt=n=>n==null?"—":n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(1)+"k":String(n);
-function showErr(msg){const e=$("#error");e.textContent=msg;e.style.display=msg?"block":"none"}
-async function api(path,opt={}){
-  let r;
-  try{r=await fetch(API+path,{...opt,headers:{...opt.headers,"Authorization":"Bearer "+key(),"Content-Type":"application/json"}})}
-  catch(err){showErr("网络错误："+err.message+"  "+path);throw 0}
-  if(r.status===401){$("#keybar").classList.add("show");$("#key").focus();showErr("需要管理密钥（401）— 输入 CPAMP 的管理密钥；在 CPAMP 登录页勾选「记住密码」后从这里打开可免输");throw 0}
-  const text=await r.text();
-  if(!r.ok){let m=text;try{m=JSON.parse(text).error?.message||text}catch(_){ }
-    showErr("请求失败 "+r.status+" "+path+"\n"+m);throw r}
-  showErr("");return JSON.parse(text)
+function showErr(m){const e=$("#err");e.textContent=m;e.style.display=m?"block":"none"}
+async function api(p,o={}){
+  let r;try{r=await fetch(API+p,{...o,headers:{...o.headers,"Authorization":"Bearer "+key(),"Content-Type":"application/json"}})}
+  catch(e){showErr("网络错误："+e.message+"  "+p);throw 0}
+  if(r.status===401){$("#keybar").classList.add("show");$("#key").focus();showErr("需要管理密钥（401）— CPAMP 登录勾选「记住密码」可免输");throw 0}
+  const t=await r.text();
+  if(!r.ok){let m=t;try{m=JSON.parse(t).error?.message||t}catch(_){}
+    showErr("请求失败 "+r.status+"  "+p+"\n"+m);throw r}
+  showErr("");return JSON.parse(t)
 }
-function dot(a){
-  const w=a.windows||[],ex=w.some(x=>x.used_pct>=100&&new Date(x.until)>new Date());
-  if(a.requires_sign_in)return"dot hollow";
-  if(ex)return"dot red";
-  if(w.some(x=>x.used_pct>=92))return"dot orange";
-  if(a.verify_pending)return"dot yellow";
-  if(a.enabled===false)return"dot gray";
-  return"dot green"
+/* ── 状态推导 ── */
+function state(a){
+  const w=a.windows||[],now=Date.now();
+  if(a.requires_sign_in)return{k:"danger",t:"需重新登录"};
+  const ex=w.find(x=>x.used_pct>=100&&new Date(x.until)>now);
+  if(ex)return{k:"danger",t:"额度用尽 · "+rel(ex.until)};
+  if(a.verify_pending)return{k:"warn",t:"待验证"};
+  if(w.some(x=>x.used_pct>=92))return{k:"warn",t:"接近限额"};
+  if(a.enabled===false)return{k:"neutral",t:"已停用"};
+  return{k:"ok",t:"可用"}
 }
-function untilTxt(x){if(!x||x.used_pct<100)return x?("重置 "+fmtT(x.until)):"";
-  const m=(new Date(x.until)-Date.now())/6e4;return m<=0?"即将重置":m<60?Math.ceil(m)+"m 后重置":Math.floor(m/60)+"h"+Math.ceil(m%60)+"m 后重置"}
-function fmtT(s){if(!s)return"—";const d=new Date(s);return d.toLocaleString()}
-const WIN_SLOTS=[["rolling","5小时额度"],["weekly","周限额"],["monthly","月限额"]];
-function winRows(a){
+function rel(iso){if(!iso)return"—";const m=(new Date(iso)-Date.now())/6e4;
+  if(m<=0)return"即将重置";if(m<60)return Math.ceil(m)+"m";if(m<1440)return(m/60).toFixed(1)+"h";return(m/1440).toFixed(1)+"d"}
+function ago(iso){if(!iso)return"—";const s=(Date.now()-new Date(iso))/1e3;
+  if(s<60)return Math.round(s)+"s 前";if(s<3600)return Math.round(s/60)+"m 前";if(s<86400)return Math.round(s/3600)+"h 前";return Math.round(s/86400)+"d 前"}
+const SLOTS=[["rolling","5 小时"],["weekly","周限额"],["monthly","月限额"]];
+function quotaRows(a){
   const m={};(a.windows||[]).forEach(w=>m[w.window]=w);
-  return WIN_SLOTS.map(([k,label])=>{
+  return SLOTS.map(([k,name])=>{
     const w=m[k];
-    if(!w||w.used_pct==null)return`<div class="win"><span class="wn">${label}</span><span class="bar empty"></span><span class="wv">读取中</span></div>`;
-    const p=Math.min(w.used_pct,100),c=p>=100?"var(--red)":p>=92?"var(--orange)":"var(--accent)";
-    return`<div class="win"><span class="wn">${label}</span>
-    <span class="bar"><i style="width:${p}%;background:${c}"></i></span>
-    <span class="wv">${p>=100?"已满":w.used_pct.toFixed(0)+"%"} · ${untilTxt(w)}</span></div>`
+    if(!w||w.used_pct==null)
+      return`<div class="q empty" title="尚未获取用量数据"><span class="q-name">${name}</span><span class="q-meta"><b>—</b><span>读取中</span></span></div>`;
+    const left=Math.max(0,100-w.used_pct),used=Math.min(w.used_pct,100);
+    const blocked=w.used_pct>=100&&new Date(w.until)>new Date();
+    const tone=blocked?"danger":left<30?"warn":left<=70?"warn":"ok";
+    const meta=blocked
+      ?`<span>阻断至重置（${rel(w.until)}）</span>`
+      :`<b>剩余 ${Math.round(left)}%</b><span>重置 ${rel(w.until)}</span>`;
+    return`<div class="q" data-tone="${tone}" title="已用 ${w.used_pct.toFixed(1)}% · 重置 ${w.until?new Date(w.until).toLocaleString():"—"} · 来源 ${esc(w.source||"")}">
+      <span class="q-name">${name}</span><span class="q-meta">${meta}</span>
+      <span class="fill" style="width:${used}%"></span></div>`
   }).join("")
 }
 function render(){
   const g=$("#grid");g.innerHTML="";
   const acc=[...(data.accounts||[])].sort((a,b)=>(a.label||a.id).localeCompare(b.label||b.id)||a.id.localeCompare(b.id));
-  $("#sum").textContent=acc.length?`${acc.length} 个账号 · ${acc.filter(a=>a.enabled!==false&&dot(a)==="dot green").length} 可用`:"";
-  if(!acc.length){g.innerHTML='<div class="empty">'+(key()?"没有账号 — 点右上角添加":"需要管理密钥 — 在下方输入后连接")+"</div>";return}
+  const cnt={ok:0,warn:0,danger:0,off:0};
+  acc.forEach(a=>{const s=state(a);if(s.k==="ok")cnt.ok++;else if(s.k==="neutral")cnt.off++;else if(s.k==="danger")cnt.danger++;else cnt.warn++});
+  $("#pills").innerHTML=`<span class="pill"><b>${acc.length}</b> 个账号</span>
+    <span class="pill"><b class="ok">${cnt.ok}</b> 可用</span>
+    ${cnt.warn?`<span class="pill"><b class="warn">${cnt.warn}</b> 受限</span>`:""}
+    ${cnt.danger?`<span class="pill"><b class="danger">${cnt.danger}</b> 异常</span>`:""}
+    ${cnt.off?`<span class="pill"><b>${cnt.off}</b> 停用</span>`:""}`;
+  if(!acc.length){g.innerHTML=`<div class="empty"><h2>${key()?"还没有账号":"需要管理密钥"}</h2><div>${key()?"添加账号后即可开始路由请求":"在下方输入 CPAMP 管理密钥后连接"}</div></div>`;return}
   for(const a of acc){
-    const d=document.createElement("div");
-    d.className="card"+(sel===a.id?" sel":"");d.dataset.id=a.id;d.tabIndex=0;
-    const wins=winRows(a);
-    d.innerHTML=`<div class="chead"><span class="${dot(a)}"></span><span class="aname">${esc(a.label||a.id)}</span><span class="akey">${esc(a.api_key_masked||"")}</span></div>
-    <div class="wins">${wins}</div>
-    <div class="stats">
-      <div class="stat"><b>${a.inflight??0}/${a.learned_concurrency_limit||"–"}</b><span>并发</span></div>
-      <div class="stat"><b>${fmt(a.usage?.requests)}</b><span>请求</span></div>
-      <div class="stat"><b>${fmt(a.usage?.input_tokens)}</b><span>输入 tok</span></div>
-      <div class="stat"><b>${fmt(a.usage?.output_tokens)}</b><span>输出 tok</span></div>
+    const s=state(a),tone=s.k==="neutral"?"neutral":s.k;
+    const el=document.createElement("article");
+    el.className="acct"+(sel===a.id?" sel":"");el.dataset.id=a.id;el.dataset.tone=tone;el.tabIndex=0;
+    const u=a.usage||{};
+    el.innerHTML=`
+    <header class="acct-top">
+      <span class="acct-name" title="${esc(a.label||a.id)}">${esc(a.label||a.id)}</span>
+      <span class="acct-key">${esc(a.api_key_masked||"")}</span>
+      <span class="badge ${s.k}"><i></i>${s.t}</span>
+      <span class="acts">
+        <button data-a="e" title="${a.enabled===false?"启用":"停用"}">${a.enabled===false?"启用":"停用"}</button>
+        <button data-a="u" title="解除阻断/恢复">恢复</button>
+        <button data-a="x" class="del" title="删除">删除</button>
+      </span>
+    </header>
+    <div class="quotas">${quotaRows(a)}</div>
+    <div class="foot">
+      <span>请求 <b>${fmt(u.requests)}</b></span>
+      <span>输入 <b>${fmt(u.input_tokens)}</b> tok</span>
+      <span>输出 <b>${fmt(u.output_tokens)}</b> tok</span>
+      <span>并发 <b>${a.inflight??0}</b><span style="color:var(--faint)">/${a.learned_concurrency_limit||"–"}</span></span>
+      ${u.last_used_at?`<span>最近使用 ${ago(u.last_used_at)}</span>`:""}
     </div>
-    <div class="ops"><button data-a="r">刷新</button><button data-a="u">恢复</button><button data-a="e">${a.enabled===false?"启用":"停用"}</button><button data-a="x" class="danger">删除</button></div>`;
-    d.onclick=e=>{const b=e.target.closest("button");
+    <details class="more"><summary>详细信息</summary><div class="more-box"><dl>
+      <div><dt>账号 ID</dt><dd>${esc(a.id)}</dd></div>
+      <div><dt>会话绑定</dt><dd>${a.bindings_count??0}</dd></div>
+      <div><dt>状态</dt><dd>${esc(a.status)}</dd></div>
+      <div><dt>最近错误</dt><dd>${a.last_error?esc(a.last_error.code)+" · "+ago(a.last_error.at):"—"}</dd></div>
+      <div><dt>并发上限</dt><dd>${a.learned_concurrency_limit||"未学习"}</dd></div>
+      <div><dt>待验证</dt><dd>${a.verify_pending?"是":"否"}</dd></div>
+    </dl></div></details>`;
+    el.onclick=e=>{const b=e.target.closest("button");
       if(b){act(a,b.dataset.a,e);e.stopPropagation();return}
-      sel=sel===a.id?null:a.id;render();if(sel)drawer(a)};
-    g.appendChild(d)
+      sel=sel===a.id?null:a.id;render()};
+    g.appendChild(el)
   }
 }
-async function drawer(a){
-  $("#detail").innerHTML="<h2>"+esc(a.label||a.id)+"</h2>";$("#drawer").classList.add("open");
-  let full=a;try{full=await api("/account?id="+encodeURIComponent(a.id))}catch(_){ }
-  const wmap={};(full.windows||[]).forEach(w=>wmap[w.window]=w);
-  const ws=WIN_SLOTS.map(([k,label])=>{const w=wmap[k];return w?`<dt>${label}</dt><dd>${(w.used_pct??0).toFixed(0)}% · 重置 ${fmtT(w.until)} · 来源 ${esc(w.source)}</dd>`:""}).join("");
-  $("#detail").innerHTML=`<h2>${esc(full.label||full.id)}</h2><div class="sub">${esc(full.id)}<br>${esc(full.api_key_masked||"")}</div>
-  <dl>
-    <dt>状态</dt><dd>${esc(full.status)}${full.enabled===false?"（已停用）":""}</dd>
-    ${ws}
-    <dt>并发</dt><dd>${full.inflight??0} / 上限 ${full.learned_concurrency_limit||"未学习"}</dd>
-    <dt>请求数</dt><dd>${fmt(full.usage?.requests)}</dd>
-    <dt>输入</dt><dd>${fmt(full.usage?.input_tokens)}</dd>
-    <dt>输出</dt><dd>${fmt(full.usage?.output_tokens)}</dd>
-    <dt>最近使用</dt><dd>${fmtT(full.usage?.last_used_at)}</dd>
-    <dt>会话绑定</dt><dd>${full.bindings_count??0}</dd>
-    <dt>最近错误</dt><dd>${full.last_error?esc(full.last_error.code)+" · "+fmtT(full.last_error.at):"—"}</dd>
-  </dl>
-  <div class="acts"><button data-a="r">刷新</button><button data-a="u">恢复</button><button data-a="b">解绑</button><button data-a="x" class="danger">删除</button></div>`;
-  $("#detail").querySelectorAll("button").forEach(b=>b.onclick=e=>act(full,b.dataset.a,e,true))
-}
-async function act(a,action,e,fromDrawer){
+async function act(a,action,e){
   e&&e.stopPropagation();
   try{
-    if(action==="r"){await api("/account/refresh",{method:"POST",body:JSON.stringify({id:a.id})})}
-    if(action==="u"){await api("/account/unblock",{method:"POST",body:JSON.stringify({id:a.id})})}
-    if(action==="b"){await api("/account/bindings/clear",{method:"POST",body:JSON.stringify({id:a.id})})}
-    if(action==="e"){await api("/account",{method:"PATCH",body:JSON.stringify({id:a.id,enabled:a.enabled===false})})}
+    if(action==="u")await api("/account/unblock",{method:"POST",body:JSON.stringify({id:a.id})});
+    if(action==="e")await api("/account",{method:"PATCH",body:JSON.stringify({id:a.id,enabled:a.enabled===false})});
     if(action==="x"){
-      if(!confirm("删除账号 "+(a.label||a.id)+"？（宿主侧登录文件由 CPA 管理，不会删除）"))return;
+      if(!confirm("删除账号 "+(a.label||a.id)+"？（宿主侧登录文件由 CPA 管理，不删除）"))return;
       await api("/account?id="+encodeURIComponent(a.id)+"&purge=true",{method:"DELETE"});
-      sel=null;$("#drawer").classList.remove("open")
+      sel=null
     }
     await load()
-  }catch(_){/* 错误已由 api() 显示 */}
+  }catch(_){}
 }
-async function load(){try{data=await api("/accounts")}catch(_){ }render()}
-function loop(){if(timer)clearInterval(timer);(async()=>{await load()})();timer=setInterval(load,5000)}
-$("#connect").onclick=()=>{localStorage.ocp_key=$("#key").value;$("#keybar").classList.remove("show");loop()};
+async function load(){try{data=await api("/accounts")}catch(_){}render()}
+function loop(){if(timer)clearInterval(timer);load();timer=setInterval(load,5000)}
+$("#conn").onclick=()=>{localStorage.ocp_key=$("#key").value;$("#keybar").classList.remove("show");loop()};
 $("#add").onclick=()=>{$("#modal").classList.add("open");$("#mname").focus()};
-$("#mcancel").onclick=()=>$("#modal").classList.remove("open");
+$("#mca").onclick=()=>$("#modal").classList.remove("open");
 $("#modal").onclick=e=>{if(e.target.id==="modal")$("#modal").classList.remove("open")};
 $("#mok").onclick=async()=>{
   const n=$("#mname").value.trim(),k=$("#mkey").value.trim();
   if(!k){showErr("API Key 不能为空");return}
-  try{
-    await api("/accounts",{method:"POST",body:JSON.stringify({name:n,api_key:k})});
+  try{await api("/accounts",{method:"POST",body:JSON.stringify({name:n,api_key:k})});
     $("#modal").classList.remove("open");$("#mname").value="";$("#mkey").value="";await load()
-  }catch(_){/* 错误已显示，模态框保持打开让用户重试 */}
+  }catch(_){}
 };
 document.onkeydown=e=>{
   if($("#modal").classList.contains("open")){if(e.key==="Escape")$("#modal").classList.remove("open");if(e.key==="Enter")$("#mok").click();return}
   if(e.target.tagName==="INPUT")return;
-  if(e.key==="Escape"){$("#drawer").classList.remove("open");return}
-  const cards=[...document.querySelectorAll(".card")];if(!cards.length)return;
+  const cards=[...document.querySelectorAll(".acct")];if(!cards.length)return;
   const i=cards.findIndex(c=>c.classList.contains("sel"));
+  if(e.key==="Escape"){sel=null;render();return}
   const n=e.key==="j"?(i<0?0:i+1):e.key==="k"?(i<0?0:i-1):i;
-  if(e.key==="j"||e.key==="k"){cards[Math.min(Math.max(n,0),cards.length-1)].click();e.preventDefault();return}
+  if(e.key==="j"||e.key==="k"){const c=cards[Math.min(Math.max(n,0),cards.length-1)];sel=c.dataset.id;render();
+    c.scrollIntoView({block:"nearest"});e.preventDefault();return}
   if(i>=0){const a=data.accounts.find(x=>x.id===cards[i].dataset.id);if(!a)return;
-    if(e.key==="e")act(a,"e");if(e.key==="r")act(a,"r");if(e.key==="u")act(a,"u");
-    if(e.key==="x")act(a,"x");if(e.key==="Enter")cards[i].click()}
+    if(e.key==="e")act(a,"e");if(e.key==="u")act(a,"u");if(e.key==="x")act(a,"x")}
 };
 loop();
 </script>

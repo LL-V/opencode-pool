@@ -1,5 +1,5 @@
 PLUGIN_ID := opencode-pool
-VERSION := 0.1.4
+VERSION := 0.2.0
 
 # 产物命名对齐插件商店约定：
 #   资产   <id>_<version>_<goos>_<goarch>.zip   (pluginstore/github.go ArchiveName)
