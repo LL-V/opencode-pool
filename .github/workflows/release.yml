@@ -19,12 +19,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # CPA 官方分发是 Linux（Docker amd64+arm64），Linux 是主战场。
+          # CPA 官方分发是 Linux（Docker amd64+arm64），只构建这两个平台；
+          # darwin/windows 需要时再加回矩阵（macos runner 排队过久）。
           - { goos: linux,  goarch: amd64, runner: ubuntu-latest }
           - { goos: linux,  goarch: arm64, runner: ubuntu-24.04-arm }
-          - { goos: darwin, goarch: amd64, runner: macos-13 }
-          - { goos: darwin, goarch: arm64, runner: macos-latest }
-          - { goos: windows, goarch: amd64, runner: windows-latest }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
