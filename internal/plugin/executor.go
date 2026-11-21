@@ -219,12 +219,21 @@ func (p *Plugin) execute(request []byte, stream bool) ([]byte, error) {
 	p.store.InflightInc(authID)
 
 	hdrs := p.applyOutboundHeaders(req.Headers, req.Payload)
-	hdrs.Set("Authorization", "Bearer "+st.APIKey)
 	// 上游端点由“请求体格式”(SourceFormat=inputFormat) 决定；Format 是
 	// 宿主期望的响应格式。跨格式路由时两者不同，用 Format 会打错端点。
 	reqFormat := req.SourceFormat
 	if strings.TrimSpace(reqFormat) == "" {
 		reqFormat = req.Format
+	}
+	// OpenCode Go 的 Anthropic 兼容端点（/messages）只认 x-api-key；
+	// Chat/Responses 用 Bearer。发错头会被网关判成"requires an API key"。
+	if reqFormat == "claude" {
+		hdrs.Set("x-api-key", st.APIKey)
+		if hdrs.Get("anthropic-version") == "" {
+			hdrs.Set("anthropic-version", "2023-06-01")
+		}
+	} else {
+		hdrs.Set("Authorization", "Bearer "+st.APIKey)
 	}
 	url := upstream.Join(st.BaseURL, endpointFor(reqFormat))
 

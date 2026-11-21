@@ -21,8 +21,9 @@ type fakeHost struct {
 	script    []fakeChunk // StreamRead 按序消费
 	emits     []string    // "streamID|payload"（host.stream.emit）
 	closes    []string    // "streamID|err"（host.stream.close）
-	lastURL   string      // 最近一次 host.http.do 的 URL
-	mu        sync.Mutex
+	lastURL     string              // 最近一次 host.http.do 的 URL
+	lastHeaders map[string][]string // 最近一次 host.http.do 的出站头
+	mu          sync.Mutex
 }
 
 // fakeAuth models one host credential entry (id + stable auth_index + file
@@ -63,11 +64,13 @@ func (f *fakeHost) CallHost(method string, payload []byte) ([]byte, error) {
 	switch method {
 	case pluginabi.MethodHostHTTPDo, pluginabi.MethodHostHTTPDoStream:
 		var hostReq struct {
-			URL string `json:"url"`
+			URL     string              `json:"url"`
+			Headers map[string][]string `json:"headers"`
 		}
 		_ = json.Unmarshal(payload, &hostReq)
 		f.mu.Lock()
 		f.lastURL = hostReq.URL
+		f.lastHeaders = hostReq.Headers
 		f.mu.Unlock()
 		up := fakeUpstream{status: 200, body: `{"ok":true}`}
 		if len(f.upstreams) > 0 {

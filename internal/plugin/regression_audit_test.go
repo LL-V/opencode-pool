@@ -201,3 +201,51 @@ func TestExecuteUsesSourceFormatEndpoint(t *testing.T) {
 		t.Fatalf("应按 SourceFormat=openai 选端点：%q", url)
 	}
 }
+
+// OpenCode Go：Anthropic /messages 只认 x-api-key；Chat/Responses 用 Bearer。
+func TestExecuteAuthHeaderPerFormat(t *testing.T) {
+	run := func(srcFormat string) map[string][]string {
+		host := &fakeHost{upstreams: []fakeUpstream{{status: 200, body: `{"ok":true}`}}}
+		p := newTestPlugin(t, host)
+		p.Store().EnsureAccount("opencode-go:aaa")
+		raw, _ := json.Marshal(pluginapi.ExecutorRequest{
+			AuthID: "opencode-go:aaa", AuthProvider: ProviderID,
+			SourceFormat: srcFormat, Format: srcFormat,
+			StorageJSON: []byte(`{"type":"opencode-go","api_key":"oc_sk_header_test"}`),
+			Payload:     []byte(`{"model":"x","messages":[]}`),
+		})
+		if _, err := p.HandleMethod(pluginabi.MethodExecutorExecute, raw); err != nil {
+			t.Fatal(err)
+		}
+		host.mu.Lock()
+		defer host.mu.Unlock()
+		return host.lastHeaders
+	}
+	get := func(h map[string][]string, name string) string {
+		for k, v := range h {
+			if strings.EqualFold(k, name) && len(v) > 0 {
+				return v[0]
+			}
+		}
+		return ""
+	}
+
+	claude := run("claude")
+	if get(claude, "x-api-key") != "oc_sk_header_test" {
+		t.Fatalf("messages 必须带 x-api-key：%v", claude)
+	}
+	if get(claude, "Authorization") != "" {
+		t.Fatalf("messages 不应带 Bearer：%v", claude)
+	}
+	if get(claude, "anthropic-version") == "" {
+		t.Fatalf("messages 应补 anthropic-version：%v", claude)
+	}
+
+	openai := run("openai")
+	if get(openai, "Authorization") != "Bearer oc_sk_header_test" {
+		t.Fatalf("chat/completions 必须带 Bearer：%v", openai)
+	}
+	if get(openai, "x-api-key") != "" {
+		t.Fatalf("chat/completions 不应带 x-api-key：%v", openai)
+	}
+}
