@@ -7,11 +7,18 @@
       "description": "OpenCode Go account pool for CLIProxyAPI: per-account usage/status, session affinity with prompt-cache-safe derivation, concurrency/quota 429 classification, automatic account switching and window-based recovery.",
       "author": "opencode-pool",
       "version": "0.1.0",
-      "repository": "LL-V/opencode-pool",
+      "repository": "https://github.com/LL-V/opencode-pool",
       "homepage": "https://github.com/LL-V/opencode-pool",
       "license": "MIT",
-      "tags": ["opencode", "pool", "scheduler", "load-balancer"],
-      "install": { "type": "github-release" }
+      "tags": [
+        "opencode",
+        "pool",
+        "scheduler",
+        "load-balancer"
+      ],
+      "install": {
+        "type": "github-release"
+      }
     }
   ]
 }
