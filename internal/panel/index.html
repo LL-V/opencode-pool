@@ -215,6 +215,9 @@ function render(){
     </dl></div></details>`;
     el.onclick=e=>{const b=e.target.closest("button");
       if(b){act(a,b.dataset.a,e);e.stopPropagation();return}
+      // 详情区域的点击交给原生 <details> 开关：此处若 render() 会在默认
+      // 切换动作生效前重建 DOM，旧节点被摘除导致永远关不上。
+      if(e.target.closest("details.more"))return;
       sel=sel===a.id?null:a.id;render()};
     const det=el.querySelector("details.more");
     det.ontoggle=()=>{det.open?openIds.add(a.id):openIds.delete(a.id)};
