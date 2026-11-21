@@ -48,13 +48,15 @@ jobs:
           go build -buildmode=c-shared -o "opencode-pool-v${ver}.${ext}" ./cmd/opencodepool
           # 资产命名 <id>_<version>_<goos>_<goarch>.zip（pluginstore/github.go:351）
           zip "opencode-pool_${ver}_${GOOS}_${GOARCH}.zip" "opencode-pool-v${ver}.${ext}"
-          sha256sum "opencode-pool_${ver}_${GOOS}_${GOARCH}.zip" >> checksums.txt
+          # 每平台写独立分片，release job 合并——同名 checksums.txt 会在
+          # artifact 合并时互相覆盖（v0.1.0 首发实测：amd64 行丢失导致安装校验失败）
+          sha256sum "opencode-pool_${ver}_${GOOS}_${GOARCH}.zip" >> "checksums-${GOOS}-${GOARCH}.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: artifact-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
             opencode-pool_*.zip
-            checksums.txt
+            checksums-*.txt
 
   release:
     needs: build
@@ -65,7 +67,9 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Merge checksums
-        run: sort -u dist/checksums.txt -o dist/checksums.txt 2>/dev/null || cat dist/checksums.txt | sort -u > dist/checksums.txt
+        run: |
+          cat dist/checksums-*.txt | sort -u > dist/checksums.txt
+          rm dist/checksums-*.txt
       - uses: softprops/action-gh-release@v2
         with:
           files: |
