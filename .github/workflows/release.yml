@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*'
+  release:
+    types: [published]  # API 创建的 tag 不触发 push 事件，release 事件兜底
 
 permissions:
   contents: write
