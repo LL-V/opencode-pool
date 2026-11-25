@@ -2,10 +2,31 @@ package plugin
 
 import (
 	"encoding/json"
+	"sort"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
+
+// orderedWindowNames returns windows in a stable display order: the three
+// known plan windows first, then any extras alphabetically. Host quota polls
+// must not reshuffle between refreshes (map iteration is random).
+func orderedWindowNames(windows map[string]bool) []string {
+	out := make([]string, 0, len(windows))
+	for _, name := range []string{"rolling", "weekly", "monthly"} {
+		if windows[name] {
+			out = append(out, name)
+		}
+	}
+	extra := make([]string, 0)
+	for name := range windows {
+		if name != "rolling" && name != "weekly" && name != "monthly" {
+			extra = append(extra, name)
+		}
+	}
+	sort.Strings(extra)
+	return append(out, extra...)
+}
 
 // quotaFetch surfaces per-account windows as normalized quota buckets.
 func (p *Plugin) quotaFetch(request []byte) ([]byte, error) {
@@ -27,10 +48,14 @@ func (p *Plugin) quotaFetch(request []byte) ([]byte, error) {
 	resp := pluginapi.QuotaFetchResponse{}
 	if acc != nil {
 		var groups []pluginapi.QuotaGroup
-		for name, w := range acc.Windows {
-			if name == "" {
-				continue
+		present := make(map[string]bool, len(acc.Windows))
+		for name := range acc.Windows {
+			if name != "" {
+				present[name] = true
 			}
+		}
+		for _, name := range orderedWindowNames(present) {
+			w := acc.Windows[name]
 			remaining := (100 - w.UsedPct) / 100
 			if remaining < 0 {
 				remaining = 0

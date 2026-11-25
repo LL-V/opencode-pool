@@ -43,6 +43,9 @@ func TestMaskKey(t *testing.T) {
 		{"oc_sk_sample111111_Aaaaaaaaaaaaaaaaaa_Bbbbbbbbbbbbbbbb", "oc_sk_sample…bbbb"},
 		{"short", "s…t"},
 		{"ab", "••••"},
+		{"123456789012", "1234…9012"},
+		{"1234567890123456", "1234…3456"},
+		{"123456789012345678901234", "1234…1234"},
 		{"", ""},
 	}
 	for _, c := range cases {

@@ -121,8 +121,12 @@ func (p *Plugin) handleLifecycle(request []byte) ([]byte, error) {
 func (p *Plugin) restoreState() {
 	p.mu.Lock()
 	dir := p.dataDir
+	// reconfigure 会再次走 register 生命周期。此时必须复用运行中的 store：
+	// 重新 Load+Adopt 会让旧 store 的 flush goroutine 继续用旧快照覆盖
+	// state.json，而新 store 没有 flush 循环，运行期数据会丢。
+	restored := p.stopFlush != nil
 	p.mu.Unlock()
-	if dir == "" {
+	if dir == "" || restored {
 		return
 	}
 	if s, err := LoadStore(filepath.Join(dir, "state.json")); err == nil {
@@ -230,17 +234,27 @@ func (p *Plugin) pick(request []byte) ([]byte, error) {
 		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
 	}
 	cands := make([]scheduler.Candidate, 0, len(req.Candidates))
+	ownIDs := make([]string, 0, len(req.Candidates))
+	foreign := 0
 	live := map[string]bool{}
 	for _, c := range req.Candidates {
 		// 只在本插件 provider 的凭据里选号；跨 provider 候选（若有）不得被
 		// 插件返回给宿主，否则可能把别家账号当成本池账号使用。
 		if c.Provider != "" && c.Provider != ProviderID {
+			foreign++
+			continue
+		}
+		if c.Provider == "" && req.Provider != ProviderID {
+			// 候选缺 Provider（老宿主）：只有请求明确是本池时才敢认领，
+			// mixed 请求下不能把他家账号当本池。
+			foreign++
 			continue
 		}
 		if c.ID == "" {
 			continue
 		}
 		cands = append(cands, scheduler.Candidate{ID: c.ID, Priority: c.Priority})
+		ownIDs = append(ownIDs, c.ID)
 		live[c.ID] = true
 	}
 	// 没有本池候选（例如 claude 模型）：必须让权。返回 Reject 会让宿主
@@ -264,9 +278,18 @@ func (p *Plugin) pick(request []byte) ([]byte, error) {
 			}
 		}
 	}
-	dec := scheduler.Pick(scheduler.Input{Candidates: cands, SessionID: sid}, storeDeps{p: p, cands: live})
+	p.pickSeqMu.Lock()
+	snap := p.store.SnapshotScheduling()
+	dec := scheduler.Pick(scheduler.Input{Candidates: cands, SessionID: sid}, storeDeps{p: p, cands: live, snap: &snap})
 	if dec.Handled && !dec.Reject && dec.AuthID != "" {
 		p.reservePick(dec.AuthID) // smooth bursts before executor inflight++
+		p.noteSelection(dec.AuthID)
+	}
+	p.pickSeqMu.Unlock()
+	// mixed 请求里本池全坏、但他家候选健康：不能 Reject（宿主会直接
+	// 终止整个请求），改为让权并排除本池坏号，由宿主路由到其他 provider。
+	if dec.Handled && dec.Reject && foreign > 0 {
+		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false, ExcludeCandidates: ownIDs})
 	}
 	resp := pluginapi.SchedulerPickResponse{
 		AuthID:       dec.AuthID,

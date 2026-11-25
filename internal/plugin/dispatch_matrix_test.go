@@ -13,7 +13,7 @@ import (
 // 调度状态矩阵穷举：对账号状态组合（含绑定）逐格跑 Pick，验证不变量：
 // ① 选中者永远不是 bad（signin/单窗耗尽）② 绑定健康必选绑定
 // ③ 全健康无信号时让权（合同设计：无约束不干预宿主轮询）
-// ④ 存在 bad 时要么接管要么 Reject，不得静默让权回坏池。
+// ④ 本池候选存在 bad 时仍由插件接管：全健康也选号，全坏才 Reject。
 func TestSchedulerStateMatrix(t *testing.T) {
 	now := time.Now()
 	// 每种状态构造函数：给账号打上状态

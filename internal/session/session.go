@@ -131,6 +131,17 @@ func derive(body []byte) string {
 		var arr []derivedMessage
 		if json.Unmarshal(root.Input, &arr) == nil {
 			msgs = arr
+		} else {
+			// Responses input may be []string; derive from its first non-empty
+			// entry instead of falling back to a per-turn whole-body hash.
+			var strs []string
+			if json.Unmarshal(root.Input, &strs) == nil {
+				for _, s := range strs {
+					if strings.TrimSpace(s) != "" {
+						return hashPrefix("d", []byte(s))
+					}
+				}
+			}
 		}
 	}
 	if len(msgs) == 0 {
@@ -183,6 +194,23 @@ func nonTextAnchor(raw json.RawMessage) string {
 	for _, item := range items {
 		if isTextBlock(item) {
 			continue
+		}
+		// OpenAI chat / Responses image blocks carry image_url (string or
+		// {url}) — without this, all image-only conversations share d-"".
+		if raw, ok := item["image_url"]; ok {
+			switch v := raw.(type) {
+			case string:
+				if v != "" {
+					return "url:" + v
+				}
+			case map[string]any:
+				if u, ok := v["url"].(string); ok && u != "" {
+					return "url:" + u
+				}
+			}
+		}
+		if fid, ok := item["file_id"].(string); ok && fid != "" {
+			return "file:" + fid
 		}
 		if u, ok := item["url"].(string); ok && u != "" {
 			return "url:" + u

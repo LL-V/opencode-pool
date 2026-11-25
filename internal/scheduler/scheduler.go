@@ -1,6 +1,7 @@
-// Package scheduler implements the yield-first auth selection policy of
-// DESIGN.md M6: healthy pools defer to the host scheduler, and the plugin
-// only takes over when a candidate is flagged bad/near/busy.
+// Package scheduler implements the auth selection policy of DESIGN.md M6.
+// The plugin always decides when it has candidates of its own provider (the
+// host's built-in picker concentrated load on one account); it yields only
+// when a request has no opencode-go candidate at all.
 package scheduler
 
 import (
@@ -37,6 +38,10 @@ type Deps interface {
 	Near(id string) bool                // any window >= near threshold, not exhausted
 	Pressure(id string) (float64, bool) // remaining%/max(hoursToReset,0.5); ok if pct known
 	Inflight(id string) int
+	// Selections counts how often the plugin has chosen the account (monotonic
+	// per process). It breaks ties when all candidates are at their capacity
+	// so a burst cannot herd onto the lowest ID.
+	Selections(id string) uint64
 	BoundAuth(sid string) (string, bool)
 	EarliestRecovery() time.Time // among bad candidates, for Reject reason
 }
@@ -103,6 +108,11 @@ func Pick(in Input, deps Deps) Decision {
 		}
 		if a.Priority != b.Priority {
 			return a.Priority > b.Priority
+		}
+		// 全员满负荷时 inflight 相等；用累计选中次数打散突发，
+		// 否则并发选号会全部落到 ID 最小的账号（压测实测 17 vs 66）。
+		if sa, sb := deps.Selections(a.ID), deps.Selections(b.ID); sa != sb {
+			return sa < sb
 		}
 		pa, oka := deps.Pressure(a.ID)
 		pb, okb := deps.Pressure(b.ID)

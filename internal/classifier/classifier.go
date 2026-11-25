@@ -46,6 +46,9 @@ type Result struct {
 	Limit    int       // learned concurrency limit (CONCURRENCY)
 	Window   string    // five_hour | weekly | monthly (QUOTA)
 	ResetAt  time.Time // absolute recovery time (QUOTA)
+	// RetryAfterSeconds carries the upstream Retry-After hint (any 429 path);
+	// concurrency/unknown 429s otherwise retry on a fixed 2–3s guess.
+	RetryAfterSeconds int
 }
 
 type errorBody struct {
@@ -64,7 +67,7 @@ type errorBody struct {
 var defaultConcurrencyKeywords = []string{"concurr", "parallel", "simultaneous"}
 
 var (
-	limitRe      = regexp.MustCompile(`current limit:\s*(\d+)`)
+	limitRe      = regexp.MustCompile(`(?i)current limit:\s*(\d+)`)
 	quotaWordsRe = regexp.MustCompile(`usage_limit_reached|usage limit`)
 	// 窗口名与 /zen/go/v1/usage 的真实键一致（rolling/weekly/monthly，
 	// 2026-11-21 实测），429 被动标记与 API 主动拉取才能按同名窗口合并。
@@ -98,6 +101,7 @@ func ClassifyWithKeywords(status int, body []byte, headers http.Header, keywords
 	if status == 200 || status < 300 && status > 0 {
 		return Result{Category: CategoryNone}
 	}
+	raSecs := 0
 	var eb errorBody
 	haveBody := len(body) > 0 && json.Valid(body)
 	if haveBody {
@@ -106,6 +110,12 @@ func ClassifyWithKeywords(status int, body []byte, headers http.Header, keywords
 	msg := eb.Error.Message
 	blob := string(body)
 
+	if status == 429 {
+		if ra := retryAfter(headers); ra > 0 {
+			// 记录原始提示，供并发/未知 429 使用；quota 分支仍按 reset 计算。
+			raSecs = int(ra.Seconds())
+		}
+	}
 	switch {
 	case status == 429:
 		lmsg := strings.ToLower(msg)
@@ -114,12 +124,12 @@ func ClassifyWithKeywords(status int, body []byte, headers http.Header, keywords
 		// 不再判并发——误判会把真限额当 2 秒瞬时错误无限重试。
 		if eb.Error.Type == "rate_limit_error" && hasConcurrencyWord(lmsg, keywords) {
 			// type=rate_limit_error 是强信号：message 内的并发词表可信。
-			return Result{Category: CategoryConcurrency, Limit: parseLimit(msg)}
+			return Result{Category: CategoryConcurrency, Limit: parseLimit(msg), RetryAfterSeconds: raSecs}
 		}
 		if parseLimit(msg) > 0 && (eb.Error.Type == "rate_limit_error" || hasConcurrencyWord(lmsg, keywords)) {
 			// "current limit: N" 短语本身是并发语义（限额上限不会这么表述）；
 			// token 量级数字由 parseLimit 的 ≤64 上限挡住。
-			return Result{Category: CategoryConcurrency, Limit: parseLimit(msg)}
+			return Result{Category: CategoryConcurrency, Limit: parseLimit(msg), RetryAfterSeconds: raSecs}
 		}
 		if matched, win := matchWindow(lmsg); matched {
 			return quotaResult(win, eb, headers, time.Now())
@@ -130,7 +140,7 @@ func ClassifyWithKeywords(status int, body []byte, headers http.Header, keywords
 		if ra := retryAfter(headers); ra >= retryAfterFloorForQuota {
 			return quotaResult("", eb, headers, time.Now())
 		}
-		return Result{Category: CategoryUnknown429}
+		return Result{Category: CategoryUnknown429, RetryAfterSeconds: raSecs}
 	case status == 401:
 		return Result{Category: CategoryAuthInvalid}
 	case status == 403:
@@ -166,7 +176,7 @@ func hasConcurrencyWord(lowerMessage string, keywords []string) bool {
 func (r Result) HostError() HostError {
 	switch r.Category {
 	case CategoryConcurrency:
-		return HostError{Code: CodeTransientRateLimit, HTTPStatus: 429, RetryAfterSeconds: 2}
+		return HostError{Code: CodeTransientRateLimit, HTTPStatus: 429, RetryAfterSeconds: retryHint(r.RetryAfterSeconds, 2)}
 	case CategoryQuota:
 		secs := int(time.Until(r.ResetAt).Seconds())
 		if secs < 0 {
@@ -177,7 +187,7 @@ func (r Result) HostError() HostError {
 		}
 		return HostError{Code: CodeCredentialQuota, HTTPStatus: 429, RetryAfterSeconds: secs, CredentialScoped: true}
 	case CategoryUnknown429:
-		return HostError{Code: CodeTransientRateLimit, HTTPStatus: 429, RetryAfterSeconds: 3}
+		return HostError{Code: CodeTransientRateLimit, HTTPStatus: 429, RetryAfterSeconds: retryHint(r.RetryAfterSeconds, 3)}
 	case CategoryWAFBlock:
 		return HostError{Code: CodeRequestScoped, HTTPStatus: 403}
 	case CategorySessionMissing:
@@ -203,6 +213,18 @@ type HostError struct {
 	HTTPStatus        int    `json:"http_status,omitempty"`
 	RetryAfterSeconds int    `json:"retry_after_seconds,omitempty"`
 	CredentialScoped  bool   `json:"credential_scoped,omitempty"`
+}
+
+// retryHint prefers the upstream Retry-After value, clamped to [1, 300]
+// seconds; without one it keeps the historical fast-retry default.
+func retryHint(got, fallback int) int {
+	if got <= 0 {
+		return fallback
+	}
+	if got > 300 {
+		return 300
+	}
+	return got
 }
 
 func parseLimit(s string) int {

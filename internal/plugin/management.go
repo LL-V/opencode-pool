@@ -8,6 +8,7 @@ import (
 	"cpa-plugin-opencode-pool/internal/store"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -61,8 +62,12 @@ func mgmtError(status int, code, message string) mgmtResponse {
 
 // statusString mirrors the §9 six-color dot derivation as a string and must
 // stay in the same priority order as the panel's state() function.
-func statusString(acc accountView) string {
+func statusString(acc accountView, nearLimitPct float64) string {
 	now := time.Now()
+	if nearLimitPct <= 0 || nearLimitPct >= 100 {
+		nearLimitPct = 8
+	}
+	nearAt := 100 - nearLimitPct
 	if !acc.Enabled {
 		return "disabled"
 	}
@@ -78,7 +83,7 @@ func statusString(acc accountView) string {
 		return "verify_pending"
 	}
 	for _, w := range acc.Windows {
-		if w.UsedPct >= 92 && now.Before(mustTime(w.Until)) {
+		if w.UsedPct >= nearAt && now.Before(mustTime(w.Until)) {
 			return "near_limit"
 		}
 	}
@@ -191,8 +196,14 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 			entry, inHost := auths[id]
 			// 误入的其他 provider 账号（例如 claude:apikey:*）必须清理：
 			// 宿主列表里存在但 provider 不同，或宿主根本不认识这个 id。
-			if (inHost && foreignAccount(id, auths)) || (auths != nil && !inHost && !strings.HasPrefix(id, ProviderID+":")) {
+			if inHost && foreignAccount(id, auths) {
 				p.store.PurgeAccount(id)
+				continue
+			}
+			if auths != nil && !inHost && !strings.HasPrefix(id, ProviderID+":") {
+				// 宿主列表回退（ID 为空）或条目缺失时，“不认识”不是权威结论：
+				// 不能留下永久墓碑，否则之后合法的同名凭据会被挡住。
+				p.store.Forget(id)
 				continue
 			}
 			p.refreshUsage(id, entry.AuthIndex) // 后台拉 /usage，节流
@@ -263,6 +274,9 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 	case method == "PUT" && path == "/settings":
 		cfg, err := p.updateSettings(payload)
 		if err != nil {
+			if errors.Is(err, errSettingsPersist) {
+				return mgmtError(500, "settings_persist_failed", err.Error())
+			}
 			return mgmtError(400, "invalid_request", "undecodable body")
 		}
 		return mgmtJSON(cfg)
@@ -301,14 +315,19 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 		if err := json.Unmarshal(payload, &in); err != nil {
 			return mgmtError(400, "invalid_request", "undecodable body")
 		}
+		// 先校验数量再产生任何副作用：旧的顺序会先落盘 settings，
+		// 然后才因超限返回 400。
+		if len(in.Accounts) > maxImportAccounts {
+			return mgmtError(400, "invalid_request", "too many accounts in one import")
+		}
 		if in.Settings != nil {
 			raw, _ := json.Marshal(in.Settings)
 			if _, err := p.updateSettings(raw); err != nil {
+				if errors.Is(err, errSettingsPersist) {
+					return mgmtError(500, "settings_persist_failed", err.Error())
+				}
 				return mgmtError(400, "invalid_request", "bad settings")
 			}
-		}
-		if len(in.Accounts) > maxImportAccounts {
-			return mgmtError(400, "invalid_request", "too many accounts in one import")
 		}
 		imported := 0
 		for _, a := range in.Accounts {
@@ -347,14 +366,19 @@ func (p *Plugin) managementServe(method, path string, query url.Values, body io.
 		if !p.accountExists(id) {
 			return mgmtError(404, "account_not_found", "no such account")
 		}
+		// 先清宿主冷却再清本地状态：宿主调用失败时不能谎报已恢复。
+		if p.bridge != nil {
+			entry, ok := p.hostAuthEntries()[id]
+			if !ok {
+				return mgmtError(409, "host_auth_missing", "host credential not found")
+			}
+			if err := p.bridge.ResetCooldown(entry.AuthIndex); err != nil {
+				return mgmtError(502, "reset_failed", err.Error())
+			}
+		}
 		p.store.SetRequiresSignIn(id, false)
 		p.store.SetVerifyPending(id, false)
 		p.store.ClearWindows(id)
-		if p.bridge != nil {
-			if entry, ok := p.hostAuthEntries()[id]; ok {
-				_ = p.bridge.ResetCooldown(entry.AuthIndex)
-			}
-		}
 		return mgmtJSON(map[string]any{"id": id, "recovered": true})
 
 	case method == "POST" && path == "/account/refresh":
@@ -415,8 +439,17 @@ func (p *Plugin) accountExists(id string) bool {
 	if _, ok := p.store.Snapshot().Accounts[id]; ok {
 		return true
 	}
-	_, ok := p.hostAuthEntries()[id]
-	return ok
+	// 宿主凭据必须属于本插件 provider：PATCH/DELETE 不能对 claude 等其他
+	// 账号创建禁用记录或墓碑。
+	entry, ok := p.hostAuthEntries()[id]
+	if !ok {
+		return false
+	}
+	provider := entry.Provider
+	if provider == "" {
+		provider = entry.Type
+	}
+	return provider == ProviderID
 }
 
 // queryID resolves the account id from the query string first, then a JSON
@@ -445,14 +478,32 @@ func (p *Plugin) materializeAccount(name, key string) (string, error) {
 	if label == "" {
 		label = maskKey(key)
 	}
-	st := storage{Type: ProviderID, Name: name, APIKey: key, Label: label}
-	raw, _ := json.Marshal(st)
 	sum := sha256.Sum256([]byte(key))
 	id := ProviderID + ":" + hex.EncodeToString(sum[:])[:12]
+	fileName := "opencode-" + hex.EncodeToString(sum[:])[:8] + ".json"
+	// 同 key 重新添加/导入时必须保留宿主 auth 文件里的其他字段
+	// （base_url / priority / proxy_url / 备注等）。AuthSave 是整文件覆盖，
+	// 旧实现只写 4 个字段，重复添加会把运营配置抹掉。
+	doc := map[string]any{}
+	if p.bridge != nil {
+		for _, f := range p.hostAuthEntries() {
+			if f.Provider != ProviderID || (f.ID != id && f.Name != fileName) || f.AuthIndex == "" {
+				continue
+			}
+			if old, err := p.bridge.AuthGet(f.AuthIndex); err == nil && len(old) > 0 {
+				_ = json.Unmarshal(old, &doc)
+			}
+			break
+		}
+	}
+	doc["type"] = ProviderID
+	doc["name"] = name
+	doc["api_key"] = key
+	doc["label"] = label
+	raw, _ := json.Marshal(doc)
 	if p.bridge != nil {
 		// host.auth.save wire: {"name": "<bare>.json", "json": <credential>}
 		// （HostAuthSaveRequest；旧的 {"auth":…} 会报 invalid auth file name）。
-		fileName := "opencode-" + hex.EncodeToString(sum[:])[:8] + ".json"
 		if _, err := p.bridge.AuthSave(fileName, raw); err != nil {
 			return "", err
 		}
@@ -475,6 +526,10 @@ func (p *Plugin) materializeAccount(name, key string) (string, error) {
 	p.invalidateAuthList()
 	p.store.ClearPurge(id) // 同一 key 重新添加 = 撤销删除
 	p.store.SetEnabled(id, true)
+	// 重新添加是操作者的明确动作：此前 401/403 留下的登录/待验证标记
+	// 必须清除，否则重新添加后账号仍不可用。
+	p.store.SetRequiresSignIn(id, false)
+	p.store.SetVerifyPending(id, false)
 	p.store.EnsureAccount(id)
 	return id, nil
 }
@@ -522,7 +577,7 @@ func (p *Plugin) viewOf(id string, acc *storeAccount, snap store.Snapshot, detai
 			v.History = append(v.History, historyEntry{At: h.At.UTC().Format(time.RFC3339), Code: h.Code})
 		}
 	}
-	v.Status = statusString(v)
+	v.Status = statusString(v, p.config().NearLimitThresholdPct)
 	return v
 }
 

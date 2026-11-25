@@ -290,7 +290,7 @@ func TestPickSpreadsConcurrentSelections(t *testing.T) {
 		}
 		seen[id] = true
 	}
-	// usage 到达后释放预约：该账号重新变为最闲，应被再次选中。
+	// 三次选号后各账号预约相同；s1 无 inflight，按“最闲→ID”兜底应再次命中。
 	call(t, p, pluginabi.MethodUsageHandle, pluginapi.UsageRecord{
 		RequestID: "rel-1", Provider: ProviderID, AuthID: "opencode-go:s1",
 	})

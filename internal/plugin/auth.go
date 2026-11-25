@@ -79,5 +79,9 @@ func maskKey(key string) string {
 	if len(key) <= 10 {
 		return key[:1] + "…" + key[len(key)-1:]
 	}
+	// 11–24 字符的 key 不能再露 12 位（几乎等于整串）；只用首尾各 4 位。
+	if len(key) <= 24 {
+		return key[:4] + "…" + key[len(key)-4:]
+	}
 	return key[:12] + "…" + key[len(key)-4:]
 }

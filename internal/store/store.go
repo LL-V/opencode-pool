@@ -121,12 +121,32 @@ type Snapshot struct {
 func (s *Store) Snapshot() Snapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.snapshotLocked(true)
+}
+
+// SnapshotScheduling is Snapshot without the binding table. Scheduler picks
+// call it once per pick (bindings are queried separately by session id);
+// copying up to 10k bindings per dependency lookup was pure overhead.
+func (s *Store) SnapshotScheduling() Snapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.snapshotLocked(false)
+}
+
+func (s *Store) snapshotLocked(withBindings bool) Snapshot {
 	snap := Snapshot{
 		Version:    s.st.Version,
 		Generation: s.st.Generation,
 		Accounts:   make(map[string]*Account, len(s.st.Accounts)),
 		Bindings:   make(map[string]string, len(s.st.Bindings)),
 		Inflight:   make(map[string]int, len(s.inflight)),
+	}
+	if withBindings {
+		for sid, b := range s.st.Bindings {
+			snap.Bindings[sid] = b.AuthID
+		}
+	} else {
+		snap.Bindings = nil
 	}
 	for id, acc := range s.st.Accounts {
 		clone := *acc
@@ -136,9 +156,6 @@ func (s *Store) Snapshot() Snapshot {
 			clone.Windows[w] = &c
 		}
 		snap.Accounts[id] = &clone
-	}
-	for sid, b := range s.st.Bindings {
-		snap.Bindings[sid] = b.AuthID
 	}
 	for id, n := range s.inflight {
 		snap.Inflight[id] = n
@@ -232,11 +249,12 @@ func (s *Store) ObserveWindowSource(id, window, source string, usedPct float64, 
 		return
 	}
 	if until.Before(w.Until.Add(-WindowTolerance)) {
-		if sourceRank(source) > sourceRank(w.Source) {
-			// Authoritative proof the window already reset — adopt.
+		// 更高权威，或同为权威 API 的自我纠正（先长后短），都应采纳；
+		// 否则一次错误的 api until 永远无法被后续正确的 /usage 修正。
+		if sourceRank(source) > sourceRank(w.Source) || (source == "api" && w.Source == "api") {
 			w.UsedPct, w.Until, w.SeenAt, w.Source = usedPct, until, now, source
 		}
-		// Same-or-lower authority with a far-earlier until is skew: reject.
+		// 同/低权威的远早 until 视为时钟漂移，拒绝。
 		return
 	}
 	// Within tolerance: refresh pct, never shorten the recovery deadline.
@@ -631,15 +649,24 @@ func (s *Store) StartAutoFlush(interval time.Duration) (stop func()) {
 
 // PurgeAccount removes all plugin-side state for an auth (hard delete from
 // the operator's perspective; the host auth file itself is host-owned).
-func (s *Store) PurgeAccount(id string) {
+func (s *Store) PurgeAccount(id string) { s.removeAccount(id, true) }
+
+// Forget removes a bogus/unknown record without a tombstone: used when the
+// host list proves nothing (empty IDs) and a permanent tombstone would
+// wrongly block a legitimate auth that appears later.
+func (s *Store) Forget(id string) { s.removeAccount(id, false) }
+
+func (s *Store) removeAccount(id string, tombstone bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Tombstone even when the record is already gone: usage events keep
 	// arriving for host auths and would recreate it on the next record.
-	if s.st.Purged == nil {
-		s.st.Purged = map[string]bool{}
+	if tombstone {
+		if s.st.Purged == nil {
+			s.st.Purged = map[string]bool{}
+		}
+		s.st.Purged[id] = true
 	}
-	s.st.Purged[id] = true
 	delete(s.st.Accounts, id)
 	delete(s.inflight, id)
 	doomed := map[string]bool{}

@@ -21,8 +21,11 @@ func (p *Plugin) usageHandle(request []byte) ([]byte, error) {
 	if rec.AuthID == "" {
 		return okEnvelope(map[string]any{})
 	}
-	// 宿主 at-least-once 投递：同一 RequestID 只记账/减计数一次。
-	if rec.RequestID != "" && p.markUsageSeen(rec.RequestID) {
+	// 宿主一次 attempt 可能投递多条 usage：附加模型（图片工具等）记录会
+	// 重新生成 RequestID，但共享同一个 SelectionID（宿主 usage_helpers
+	// buildAdditionalModelRecord）。按 SelectionID 去重保证一次 execute 只
+	// 减一次 inflight；缺 SelectionID 时才退回 RequestID（at-least-once 重放）。
+	if key := usageDedupeKey(rec); key != "" && p.markUsageSeen(key) {
 		return okEnvelope(map[string]any{})
 	}
 	// inflight 配对属于“这次尝试”本身，必须在任何过滤之前完成；
@@ -52,9 +55,21 @@ func (p *Plugin) usageHandle(request []byte) ([]byte, error) {
 		res := classifier.ClassifyWithKeywords(rec.Failure.StatusCode, body, nil, p.config().ConcurrencyKeywords)
 		switch res.Category {
 		case classifier.CategoryQuota:
-			p.store.ObserveWindowSource(rec.AuthID, res.Window, "429", 100, res.ResetAt, now)
+			// 限额 429 没有窗口词时也必须归到 rolling：空键窗口永远不会被
+			// /usage 的 rolling/weekly 更新覆盖，会把账号封到幽灵窗口到期。
+			window := res.Window
+			if window == "" {
+				window = "rolling"
+			}
+			p.store.ObserveWindowSource(rec.AuthID, window, "429", 100, res.ResetAt, now)
 		case classifier.CategoryConcurrency:
 			p.store.LearnLimit(rec.AuthID, res.Limit)
+		case classifier.CategoryAuthInvalid:
+			// 失败尝试同样要维护凭据状态（例如 executor 早退没分类的 401），
+			// 否则坏账号会一直留在候选池里。
+			p.store.SetRequiresSignIn(rec.AuthID, true)
+		case classifier.CategoryAuthSuspect:
+			p.store.SetVerifyPending(rec.AuthID, true)
 		}
 		p.store.NoteError(rec.AuthID, string(res.Category), now)
 		return okEnvelope(map[string]any{})
@@ -67,6 +82,20 @@ func (p *Plugin) usageHandle(request []byte) ([]byte, error) {
 		p.store.Bind(rec.SessionID, rec.AuthID, now)
 	}
 	return okEnvelope(map[string]any{})
+}
+
+// usageDedupeKey identifies one executor attempt. SelectionID is per pick and
+// is shared by the primary and additional-model usage records; RequestID is
+// unique per record and only serves the replay case when SelectionID is
+// absent.
+func usageDedupeKey(rec pluginapi.UsageRecord) string {
+	if v := strings.TrimSpace(rec.SelectionID); v != "" {
+		return "sel:" + v
+	}
+	if v := strings.TrimSpace(rec.RequestID); v != "" {
+		return "req:" + v
+	}
+	return ""
 }
 
 // usageSeenTTL bounds the idempotency set; host replays happen within

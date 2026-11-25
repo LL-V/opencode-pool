@@ -75,3 +75,67 @@ func TestPickStillRejectsWhenOwnCandidatesAllBad(t *testing.T) {
 		t.Fatalf("本池候选全坏时必须 Handled+Reject：got %+v", resp)
 	}
 }
+
+// mixed 请求里本池候选全坏、但还有其他 provider 的候选：必须让权并排除
+// 本池坏号，而不是 Reject 把整个请求（其他 provider 还有健康号）打死。
+func TestPickMixedExcludesBadPoolAndYields(t *testing.T) {
+	host := &fakeHost{}
+	p := newTestPlugin(t, host)
+	call(t, p, pluginabi.MethodPluginRegister, map[string]any{"config_yaml": ""})
+	own := addAccount(t, p, "bad@x.com", "oc_sk_bad_0000000000000000000000")
+	p.Store().PurgeAccount(own)
+
+	raw, _ := json.Marshal(pluginapi.SchedulerPickRequest{
+		Provider: "", Model: "shared-model",
+		Candidates: []pluginapi.SchedulerAuthCandidate{
+			{ID: own, Provider: ProviderID, Priority: 1},
+			{ID: "claude:apikey:healthy", Provider: "claude", Priority: 1},
+		},
+	})
+	out, _ := p.HandleMethod(pluginabi.MethodSchedulerPick, raw)
+	var env pluginabi.Envelope
+	_ = json.Unmarshal(out, &env)
+	var resp pluginapi.SchedulerPickResponse
+	_ = json.Unmarshal(env.Result, &resp)
+	if resp.Handled || resp.Reject {
+		t.Fatalf("mixed 本池全坏应让权：got %+v", resp)
+	}
+	found := false
+	for _, id := range resp.ExcludeCandidates {
+		if id == own {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("应排除本池坏号：%+v", resp)
+	}
+}
+
+// 候选缺 Provider（老宿主）时：请求未指明本池（mixed）不得认领；请求明确
+// 是本池时仍可正常选号。
+func TestPickCandidateWithoutProviderField(t *testing.T) {
+	host := &fakeHost{}
+	p := newTestPlugin(t, host)
+	call(t, p, pluginabi.MethodPluginRegister, map[string]any{"config_yaml": ""})
+	id := addAccount(t, p, "legacy@x.com", "oc_sk_legacy_000000000000000000")
+
+	pick := func(reqProvider string) pluginapi.SchedulerPickResponse {
+		raw, _ := json.Marshal(pluginapi.SchedulerPickRequest{
+			Provider: reqProvider, Model: "x",
+			Candidates: []pluginapi.SchedulerAuthCandidate{{ID: id}},
+		})
+		out, _ := p.HandleMethod(pluginabi.MethodSchedulerPick, raw)
+		var env pluginabi.Envelope
+		_ = json.Unmarshal(out, &env)
+		var resp pluginapi.SchedulerPickResponse
+		_ = json.Unmarshal(env.Result, &resp)
+		return resp
+	}
+
+	if resp := pick(""); resp.Handled {
+		t.Fatalf("mixed 且候选无 Provider 必须让权：%+v", resp)
+	}
+	if resp := pick(ProviderID); !resp.Handled || resp.AuthID != id {
+		t.Fatalf("明确本池请求应正常选号：%+v", resp)
+	}
+}

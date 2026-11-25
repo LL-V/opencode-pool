@@ -155,8 +155,17 @@ async function api(p,o={}){
   showErr("");return d
 }
 function state(a){
-  // 顺序必须与后端 statusString 一致：停用 > 耗尽 > 需登录 > 待验证 > 接近 > 可用
+  // 以后端 status 为准（阈值 near_limit_threshold_pct 可配）；仅旧服务端/加载中回退本地判断。
   const w=a.windows||[],now=Date.now();
+  switch(a.status){
+    case"disabled":return{k:"neutral",t:"已停用"};
+    case"exhausted":{const ex=w.find(x=>x.used_pct>=100&&new Date(x.until)>now);
+      return{k:"danger",t:"额度用尽"+(ex?" · "+rel(ex.until):"")}}
+    case"sign_in_required":return{k:"danger",t:"需重新登录"};
+    case"verify_pending":return{k:"warn",t:"待验证"};
+    case"near_limit":return{k:"warn",t:"接近限额"};
+    case"active":return{k:"ok",t:"可用"};
+  }
   if(a.enabled===false)return{k:"neutral",t:"已停用"};
   const ex=w.find(x=>x.used_pct>=100&&new Date(x.until)>now);
   if(ex)return{k:"danger",t:"额度用尽 · "+rel(ex.until)};

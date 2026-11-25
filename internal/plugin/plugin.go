@@ -17,7 +17,7 @@ import (
 const (
 	PluginID      = "opencode-pool"
 	ProviderID    = "opencode-go"
-	PluginVersion = "0.2.9"
+	PluginVersion = "0.2.10"
 )
 
 // Plugin is the assembled capability set plus runtime state.
@@ -45,6 +45,33 @@ type Plugin struct {
 	// all see the same idle account.
 	pickMu  sync.Mutex
 	pickRes map[string][]time.Time
+	// pickSeqMu serializes selection+reservation so concurrent picks observe
+	// each other's reservations; without it a 200-way burst all sees the same
+	// near-empty snapshot and herds onto one account.
+	pickSeqMu   sync.Mutex
+	pickCountMu sync.Mutex
+	pickCounts  map[string]uint64
+	// settingsMu serializes settings update+persist (concurrent PUT /settings).
+	settingsMu sync.Mutex
+}
+
+// selections returns the process-lifetime selection count for an account.
+func (p *Plugin) selections(id string) uint64 {
+	p.pickCountMu.Lock()
+	defer p.pickCountMu.Unlock()
+	return p.pickCounts[id]
+}
+
+func (p *Plugin) noteSelection(id string) {
+	if id == "" {
+		return
+	}
+	p.pickCountMu.Lock()
+	if p.pickCounts == nil {
+		p.pickCounts = map[string]uint64{}
+	}
+	p.pickCounts[id]++
+	p.pickCountMu.Unlock()
 }
 
 // pickReservationTTL releases reservations whose usage event never arrived.
@@ -199,6 +226,17 @@ func (p *Plugin) buildRegistration() registration {
 type storeDeps struct {
 	p     *Plugin
 	cands map[string]bool // candidate ids for EarliestRecovery scoping
+	// snap is one scheduling snapshot shared by every dependency lookup in
+	// this pick: a fresh deep copy per lookup was expensive and made the
+	// comparator see different states within one decision.
+	snap *store.Snapshot
+}
+
+func (d storeDeps) snapshot() store.Snapshot {
+	if d.snap != nil {
+		return *d.snap
+	}
+	return d.p.store.SnapshotScheduling()
 }
 
 func (d storeDeps) Bad(id string) bool {
@@ -206,7 +244,7 @@ func (d storeDeps) Bad(id string) bool {
 	if d.p.store.IsPurged(id) {
 		return true
 	}
-	acc := d.p.store.Snapshot().Accounts[id]
+	acc := d.snapshot().Accounts[id]
 	if acc == nil {
 		return false
 	}
@@ -225,7 +263,7 @@ func (d storeDeps) Bad(id string) bool {
 const defaultAssumedConcurrencyLimit = 20
 
 func (d storeDeps) Busy(id string) bool {
-	snap := d.p.store.Snapshot()
+	snap := d.snapshot()
 	acc := snap.Accounts[id]
 	limit := 0
 	if acc != nil {
@@ -239,7 +277,7 @@ func (d storeDeps) Busy(id string) bool {
 
 func (d storeDeps) Near(id string) bool {
 	now := time.Now()
-	acc := d.p.store.Snapshot().Accounts[id]
+	acc := d.snapshot().Accounts[id]
 	if acc == nil {
 		return false
 	}
@@ -257,14 +295,14 @@ func (d storeDeps) Near(id string) bool {
 // Pressure = remaining% / max(hours to reset, 0.5), only when pct is known.
 func (d storeDeps) Pressure(id string) (float64, bool) {
 	now := time.Now()
-	acc := d.p.store.Snapshot().Accounts[id]
+	acc := d.snapshot().Accounts[id]
 	if acc == nil || len(acc.Windows) == 0 {
 		return 0, false
 	}
 	best := -1.0
 	ok := false
 	for _, w := range acc.Windows {
-		if w.UsedPct <= 0 || w.UsedPct >= 100 || !now.Before(w.Until) {
+		if w.UsedPct < 0 || w.UsedPct >= 100 || !now.Before(w.Until) {
 			continue // 过期窗口同上，不参与压力排序
 		}
 		h := time.Until(w.Until).Hours()
@@ -279,23 +317,26 @@ func (d storeDeps) Pressure(id string) (float64, bool) {
 }
 
 func (d storeDeps) Inflight(id string) int {
-	return d.p.store.Snapshot().Inflight[id] + d.p.pickReservations(id)
+	return d.snapshot().Inflight[id] + d.p.pickReservations(id)
 }
+
+func (d storeDeps) Selections(id string) uint64 { return d.p.selections(id) }
 
 func (d storeDeps) BoundAuth(sid string) (string, bool) {
 	return d.p.store.LookupBinding(sid, time.Now())
 }
 
 func (d storeDeps) EarliestRecovery() time.Time {
-	snap := d.p.store.Snapshot()
+	snap := d.snapshot()
 	var earliest time.Time
 	for id := range d.cands {
 		acc := snap.Accounts[id]
 		if acc == nil {
 			continue
 		}
+		now := time.Now()
 		for _, w := range acc.Windows {
-			if w.UsedPct >= 100 && (earliest.IsZero() || w.Until.Before(earliest)) {
+			if w.UsedPct >= 100 && now.Before(w.Until) && (earliest.IsZero() || w.Until.Before(earliest)) {
 				earliest = w.Until
 			}
 		}

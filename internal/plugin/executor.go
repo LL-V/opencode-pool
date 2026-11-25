@@ -198,19 +198,29 @@ func (p *Plugin) execute(request []byte, stream bool) ([]byte, error) {
 	if err := json.Unmarshal(request, &req); err != nil {
 		return nil, err
 	}
+	authID := req.AuthID
+	// The pick-time reservation only covers the gap until execution starts.
+	// Release it on every path (including early failures) so a malformed
+	// account cannot pin the slot until the 90s TTL.
+	p.releasePick(authID)
+	// 已删除（墓碑）账号：宿主可能因在途/重放仍执行一次，绝不能重建记录。
+	if p.store.IsPurged(authID) {
+		return errEnvelopeHostBytes(pluginabi.Error{Message: "account deleted", HTTPStatus: 401, CredentialScoped: true}), nil
+	}
+	// Count this attempt before any early return: the host delivers one usage
+	// record per attempt, and a mismatched decrement would eat another live
+	// request's slot on the same account.
+	p.store.EnsureAccount(authID)
+	p.store.InflightInc(authID)
 	if p.bridge == nil {
 		return errEnvelopeHostBytes(pluginabi.Error{Code: "not_ready", Message: "host bridge unavailable", HTTPStatus: 500}), nil
 	}
 	st := parseStorage(req.StorageJSON)
 	if st.APIKey == "" {
-		return errEnvelopeHostBytes(pluginabi.Error{Code: "request_scoped", Message: "account has no api_key", HTTPStatus: 400}), nil
+		// 凭据缺 key 是账号问题，不能 request_scoped（宿主会停止换号）；
+		// 用 401 + CredentialScoped 让宿主换号，usage 侧会标记需重新登录。
+		return errEnvelopeHostBytes(pluginabi.Error{Message: "account has no api_key", HTTPStatus: 401, CredentialScoped: true}), nil
 	}
-	authID := req.AuthID
-	p.store.EnsureAccount(authID)
-	p.store.InflightInc(authID)
-	// The pick-time reservation only covers the gap until execution starts;
-	// after inflight++ it would double-count the same request.
-	p.releasePick(authID)
 
 	hdrs := p.applyOutboundHeaders(req.Headers, req.Payload)
 	// 上游端点由“请求体格式”(SourceFormat=inputFormat) 决定；Format 是
@@ -233,7 +243,7 @@ func (p *Plugin) execute(request []byte, stream bool) ([]byte, error) {
 
 	ctx := context.Background()
 	if stream {
-		return p.executeStream(ctx, authID, url, hdrs, req.Payload, req.StreamID, req.HostCallbackID)
+		return p.executeStream(ctx, authID, url, hdrs, req.Payload, canonicalSession(req.Metadata), req.StreamID, req.HostCallbackID)
 	}
 
 	resp, err := p.bridge.Do(ctx, pluginapi.HTTPRequest{Method: "POST", URL: url, Headers: hdrs, Body: req.Payload}, req.HostCallbackID)
@@ -243,16 +253,31 @@ func (p *Plugin) execute(request []byte, stream bool) ([]byte, error) {
 	if he := p.classifyUpstream(authID, resp.StatusCode, resp.Body, resp.Headers); he != nil {
 		return errEnvelopeHostBytes(pluginabi.Error{Code: he.Code, Message: he.Message, HTTPStatus: he.HTTPStatus, RetryAfterSeconds: he.RetryAfterSeconds, CredentialScoped: he.CredentialScoped}), nil
 	}
-	p.bindSession(authID, hdrs, req.Payload)
+	p.bindSession(authID, hdrs, req.Payload, canonicalSession(req.Metadata))
 	return okEnvelope(pluginapi.ExecutorResponse{Payload: resp.Body, Headers: resp.Headers})
+}
+
+// canonicalSession extracts the host's canonical session key from executor
+// metadata (cliproxyexecutor.CanonicalSessionIDMetadataKey).
+func canonicalSession(meta map[string]any) string {
+	if meta == nil {
+		return ""
+	}
+	v, _ := meta["canonical_session_id"].(string)
+	return v
 }
 
 // bindSession records session→auth affinity on upstream acceptance
 // (write-on-success). 无头客户端没有宿主 canonical session（usage.handle 的
 // SessionID 为空），executor 是它们唯一的绑定写入点；派生键 d- 稳定于首条
 // user 消息，b-（body 哈希）逐请求变化无亲和价值，跳过。
-func (p *Plugin) bindSession(authID string, hdrs http.Header, body []byte) {
-	sid := p.resolveSession(hdrs, body)
+func (p *Plugin) bindSession(authID string, hdrs http.Header, body []byte, canonical string) {
+	// 有宿主 canonical 键时优先用它（与 usage.handle 的 record.SessionID
+	// 同源）；否则退回导出的客户端/派生值。两套键混写会白占 LRU。
+	sid := strings.TrimSpace(canonical)
+	if sid == "" {
+		sid = p.resolveSession(hdrs, body)
+	}
 	if sid == "" || strings.HasPrefix(sid, "b-") {
 		return
 	}
@@ -271,7 +296,7 @@ func (p *Plugin) bindSession(authID string, hdrs http.Header, body []byte) {
 // 异步模式（host 约定：RPC 响应 chunks 为空 = 插件稍后经 host.stream.emit
 // 推送、host.stream.close 收尾，rpc_client_stream.go:29-47）；否则退回
 // 同步数组模式（旧 host 兼容）。
-func (p *Plugin) executeStream(ctx context.Context, authID, url string, hdrs http.Header, body []byte, pluginStreamID, callbackID string) ([]byte, error) {
+func (p *Plugin) executeStream(ctx context.Context, authID, url string, hdrs http.Header, body []byte, canonical, pluginStreamID, callbackID string) ([]byte, error) {
 	status, respHdrs, streamID, err := p.bridge.DoStream(ctx, pluginapi.HTTPRequest{Method: "POST", URL: url, Headers: hdrs, Body: body}, callbackID)
 	if err != nil {
 		return errEnvelopeHostBytes(pluginabi.Error{Code: "transient_transport", Message: err.Error(), HTTPStatus: 502}), nil
@@ -286,14 +311,17 @@ func (p *Plugin) executeStream(ctx context.Context, authID, url string, hdrs htt
 		}
 		return errEnvelopeHostBytes(pluginabi.Error{Code: "upstream_error", Message: "upstream rejected stream", HTTPStatus: status}), nil
 	}
+	// 流式 2xx 同样证明凭据可用（旧实现只在非流路径清疑态，
+	// verify_pending 会一直挂在面板上）。
+	p.classifyUpstream(authID, status, nil, respHdrs)
 	if pluginStreamID != "" {
 		// 异步模式：先返回 headers（chunks 为空），再后台泵流。
-		p.bindSession(authID, hdrs, body)
+		p.bindSession(authID, hdrs, body, canonical)
 		go p.pumpUpstreamStream(pluginStreamID, streamID)
 		return okEnvelope(map[string]any{"headers": respHdrs})
 	}
 	// 同步数组模式：读完所有 chunk 再一次性返回。
-	p.bindSession(authID, hdrs, body)
+	p.bindSession(authID, hdrs, body, canonical)
 	var chunks []pluginapi.ExecutorStreamChunk
 	for {
 		payload, errMsg, done, rerr := p.bridge.StreamRead(streamID)
@@ -303,8 +331,13 @@ func (p *Plugin) executeStream(ctx context.Context, authID, url string, hdrs htt
 		}
 		if errMsg != "" {
 			_ = p.bridge.StreamClose(streamID)
-			chunks = append(chunks, pluginapi.ExecutorStreamChunk{Payload: payload, Err: errString(errMsg)})
-			break
+			// 同步块里的 Err 是 error 接口，宿主无法从 JSON 字符串还原；
+			// 用错误信封返回，宿主按流截断失败处理（不换号重试）。
+			msg := errMsg
+			if len(payload) > 0 {
+				msg = errMsg + ": " + upstreamSnippet(payload)
+			}
+			return errEnvelopeHostBytes(pluginabi.Error{Code: "stream_truncated", Message: msg, HTTPStatus: 502}), nil
 		}
 		if len(payload) > 0 {
 			cp := make([]byte, len(payload))
@@ -315,6 +348,11 @@ func (p *Plugin) executeStream(ctx context.Context, authID, url string, hdrs htt
 			_ = p.bridge.StreamClose(streamID)
 			break
 		}
+	}
+	if len(chunks) == 0 {
+		// 空 chunks 会被宿主判为异步模式并等待永不出现的 emit/close；
+		// 塞一个空块表示同步空流已正常结束。
+		chunks = append(chunks, pluginapi.ExecutorStreamChunk{})
 	}
 	return okEnvelope(map[string]any{"headers": respHdrs, "chunks": chunks})
 }
@@ -337,8 +375,10 @@ func (p *Plugin) pumpUpstreamStream(pluginStreamID, upstreamStreamID string) {
 		payload, errMsg, done, rerr := p.bridge.StreamRead(upstreamStreamID)
 		if rerr != nil {
 			_ = p.bridge.StreamClose(upstreamStreamID)
+			// 已经进入流式阶段：不是 HTTP 建立前的拨号失败，按流截断处理，
+			// 宿主不会换号重放（避免重复生成）。
 			p.bridge.FinishStream(pluginStreamID, rerr.Error(), &pluginabi.Error{
-				Code: "transient_transport", Message: rerr.Error(), HTTPStatus: 502,
+				Code: "stream_truncated", Message: rerr.Error(), HTTPStatus: 502,
 			})
 			return
 		}

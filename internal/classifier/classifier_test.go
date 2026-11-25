@@ -184,7 +184,10 @@ func TestClassifyWithCustomKeywords(t *testing.T) {
 // reset 时间解析：RFC3339 / HTTP-date / unix / 自然语言 都应可用。
 func TestResetFormats(t *testing.T) {
 	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
-	cases := []struct{ raw string; want time.Time }{
+	cases := []struct {
+		raw  string
+		want time.Time
+	}{
 		{"2026-11-21T17:00:00Z", time.Date(2026, 11, 21, 17, 0, 0, 0, time.UTC)},
 		{"Sat, 21 Nov 2026 17:00:00 GMT", time.Date(2026, 11, 21, 17, 0, 0, 0, time.UTC)},
 		{"1795280400", time.Unix(1795280400, 0)},

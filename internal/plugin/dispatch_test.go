@@ -14,13 +14,13 @@ import (
 
 // fakeHost implements HostCaller with scripted upstream responses.
 type fakeHost struct {
-	upstreams []fakeUpstream // 按序消费
-	calls     []string
-	saved     []map[string]any // 原始 auth.save 请求
-	byID      map[string]*fakeAuth
-	script    []fakeChunk // StreamRead 按序消费
-	emits     []string    // "streamID|payload"（host.stream.emit）
-	closes    []string    // "streamID|err"（host.stream.close）
+	upstreams   []fakeUpstream // 按序消费
+	calls       []string
+	saved       []map[string]any // 原始 auth.save 请求
+	byID        map[string]*fakeAuth
+	script      []fakeChunk         // StreamRead 按序消费
+	emits       []string            // "streamID|payload"（host.stream.emit）
+	closes      []string            // "streamID|err"（host.stream.close）
 	lastURL     string              // 最近一次 host.http.do 的 URL
 	lastHeaders map[string][]string // 最近一次 host.http.do 的出站头
 	mu          sync.Mutex

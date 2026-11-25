@@ -1,6 +1,8 @@
 package scheduler
 
 import (
+	"fmt"
+	"math/rand"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,7 @@ type fakeDeps struct {
 	pressure         map[string]float64
 	hasPct           map[string]bool
 	inflight         map[string]int
+	selections       map[string]uint64
 	bindTo           string // 绑定表命中
 	earliestRecovery time.Time
 }
@@ -24,6 +27,7 @@ func (d fakeDeps) Busy(id string) bool                { return d.busy[id] }
 func (d fakeDeps) Near(id string) bool                { return d.near[id] }
 func (d fakeDeps) Pressure(id string) (float64, bool) { return d.pressure[id], d.hasPct[id] }
 func (d fakeDeps) Inflight(id string) int             { return d.inflight[id] }
+func (d fakeDeps) Selections(id string) uint64        { return d.selections[id] }
 func (d fakeDeps) EarliestRecovery() time.Time        { return d.earliestRecovery }
 
 func (d fakeDeps) BoundAuth(sid string) (string, bool) {
@@ -176,5 +180,81 @@ func TestEmptyCandidatesYields(t *testing.T) {
 	got := Pick(Input{Now: ts(0)}, fakeDeps{hasPct: map[string]bool{}})
 	if got.Handled || got.Reject {
 		t.Fatalf("空候选应让权：got %+v", got)
+	}
+}
+
+// 随机化不变量压测：5000 轮随机状态，检查
+//  1. 非空候选不得让权；
+//  2. Reject 仅当全部候选都坏；
+//  3. 绝不返回坏账号；
+//  4. 存在非忙候选时不得返回忙账号；
+//  5. 绑定账号健康（非忙非近）时必须命中亲和。
+func TestPickInvariantsRandom(t *testing.T) {
+	rng := rand.New(rand.NewSource(7))
+	for iter := 0; iter < 5000; iter++ {
+		n := rng.Intn(7) // 0..6
+		d := fakeDeps{
+			bad: map[string]bool{}, busy: map[string]bool{}, near: map[string]bool{},
+			pressure: map[string]float64{}, hasPct: map[string]bool{},
+			inflight: map[string]int{}, selections: map[string]uint64{},
+		}
+		var cands []Candidate
+		for i := 0; i < n; i++ {
+			id := fmt.Sprintf("acct-%d", i)
+			cands = append(cands, cand(id, rng.Intn(3)))
+			d.bad[id] = rng.Intn(4) == 0
+			d.busy[id] = rng.Intn(3) == 0
+			d.near[id] = rng.Intn(5) == 0
+			d.inflight[id] = rng.Intn(25)
+			d.selections[id] = uint64(rng.Intn(100))
+			if rng.Intn(2) == 0 {
+				d.hasPct[id] = true
+				d.pressure[id] = rng.Float64() * 50
+			}
+		}
+		sid := ""
+		if n > 0 && rng.Intn(3) == 0 {
+			sid = "sid-x"
+			d.bindTo = fmt.Sprintf("acct-%d", rng.Intn(n))
+		}
+		got := Pick(Input{Candidates: cands, SessionID: sid, Now: ts(iter % 1000)}, d)
+
+		if len(cands) == 0 {
+			if got.Handled || got.Reject {
+				t.Fatalf("iter %d: 空候选必须让权：%+v", iter, got)
+			}
+			continue
+		}
+		if !got.Handled {
+			t.Fatalf("iter %d: 非空候选不得让权", iter)
+		}
+		if got.Reject {
+			for _, c := range cands {
+				if !d.bad[c.ID] {
+					t.Fatalf("iter %d: Reject 但候选 %s 不坏：%+v", iter, c.ID, got)
+				}
+			}
+			continue
+		}
+		if got.AuthID == "" {
+			t.Fatalf("iter %d: 既非 Reject 又没有 AuthID", iter)
+		}
+		if d.bad[got.AuthID] {
+			t.Fatalf("iter %d: 选中了坏账号 %s", iter, got.AuthID)
+		}
+		anyNonBusy := false
+		for _, c := range cands {
+			if !d.bad[c.ID] && !d.busy[c.ID] {
+				anyNonBusy = true
+			}
+		}
+		if anyNonBusy && d.busy[got.AuthID] {
+			t.Fatalf("iter %d: 存在非忙账号却选了忙账号 %s", iter, got.AuthID)
+		}
+		if sid != "" && d.bindTo != "" && !d.bad[d.bindTo] && !d.busy[d.bindTo] && !d.near[d.bindTo] {
+			if got.AuthID != d.bindTo {
+				t.Fatalf("iter %d: 绑定账号健康时应命中亲和 %s，got %s", iter, d.bindTo, got.AuthID)
+			}
+		}
 	}
 }

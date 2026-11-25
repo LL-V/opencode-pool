@@ -22,10 +22,23 @@ func TestObserveWindowMonotonic(t *testing.T) {
 	if w.UsedPct != 50 {
 		t.Fatalf("容差内更新应接受：got %.1f", w.UsedPct)
 	}
-	s.ObserveWindowSource("a1", "five_hour", "api", 30, ts(200), ts(0)) // 远旧 until → 拒绝
+	// 低权威来源的远旧 until 视为时钟漂移 → 拒绝（保留 api 记录的截止时间）。
+	s.ObserveWindowSource("a1", "five_hour", "429", 30, ts(200), ts(0))
 	w = s.Snapshot().Accounts["a1"].Windows["five_hour"]
 	if w.UsedPct != 50 {
-		t.Fatalf("远旧观测应拒绝（防时间回退）：got %.1f", w.UsedPct)
+		t.Fatalf("低权威远旧观测应拒绝（防时间回退）：got %.1f", w.UsedPct)
+	}
+}
+
+// 同为权威 API 的更正必须采纳：一次异常的 resetsAt 不能被后续正确值卡死。
+func TestObserveWindowAPISelfCorrection(t *testing.T) {
+	s := New("")
+	s.EnsureAccount("a1")
+	s.ObserveWindowSource("a1", "weekly", "api", 90, ts(5000), ts(0))
+	s.ObserveWindowSource("a1", "weekly", "api", 10, ts(60), ts(10))
+	w := s.Snapshot().Accounts["a1"].Windows["weekly"]
+	if w.UsedPct != 10 || !w.Until.Equal(ts(60)) {
+		t.Fatalf("api→api 提前收窗应采纳：got %+v", w)
 	}
 }
 
