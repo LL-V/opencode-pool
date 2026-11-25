@@ -328,3 +328,30 @@ func TestUnknownLimitUsesAssumedCap(t *testing.T) {
 		t.Fatalf("达到默认并发上限的账号不得再被选中：got %q", resp.AuthID)
 	}
 }
+
+// 预约不能与 inflight 重复计数：executor 开始后只算 inflight。
+func TestPickReservationReleasedAtExecutionStart(t *testing.T) {
+	host := &fakeHost{upstreams: []fakeUpstream{{status: 200, body: `{"ok":true}`}}}
+	p := newTestPlugin(t, host)
+	id := "opencode-go:res"
+	p.Store().EnsureAccount(id)
+	p.Store().LearnLimit(id, 20)
+	p.reservePick(id)
+	if got := p.pickReservations(id); got != 1 {
+		t.Fatalf("预约计数：%d", got)
+	}
+	raw, _ := json.Marshal(pluginapi.ExecutorRequest{
+		AuthID: id, AuthProvider: ProviderID, Format: "openai",
+		StorageJSON: []byte(`{"type":"opencode-go","api_key":"sk-res"}`),
+		Payload:     []byte(`{"model":"x","messages":[]}`),
+	})
+	if _, err := p.HandleMethod(pluginabi.MethodExecutorExecute, raw); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.pickReservations(id); got != 0 {
+		t.Fatalf("执行开始后预约应释放，避免与 inflight 双计：%d", got)
+	}
+	if got := p.Store().Snapshot().Inflight[id]; got != 1 {
+		t.Fatalf("inflight 应为 1：%d", got)
+	}
+}

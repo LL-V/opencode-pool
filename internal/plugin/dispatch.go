@@ -227,6 +227,14 @@ func (p *Plugin) pick(request []byte) ([]byte, error) {
 	cands := make([]scheduler.Candidate, 0, len(req.Candidates))
 	live := map[string]bool{}
 	for _, c := range req.Candidates {
+		// 只在本插件 provider 的凭据里选号；跨 provider 候选（若有）不得被
+		// 插件返回给宿主，否则可能把别家账号当成本池账号使用。
+		if c.Provider != "" && c.Provider != ProviderID {
+			continue
+		}
+		if c.ID == "" {
+			continue
+		}
 		cands = append(cands, scheduler.Candidate{ID: c.ID, Priority: c.Priority})
 		live[c.ID] = true
 	}

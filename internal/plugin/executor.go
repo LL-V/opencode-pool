@@ -208,6 +208,9 @@ func (p *Plugin) execute(request []byte, stream bool) ([]byte, error) {
 	authID := req.AuthID
 	p.store.EnsureAccount(authID)
 	p.store.InflightInc(authID)
+	// The pick-time reservation only covers the gap until execution starts;
+	// after inflight++ it would double-count the same request.
+	p.releasePick(authID)
 
 	hdrs := p.applyOutboundHeaders(req.Headers, req.Payload)
 	// 上游端点由“请求体格式”(SourceFormat=inputFormat) 决定；Format 是
