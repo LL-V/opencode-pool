@@ -27,6 +27,7 @@ func (p *Plugin) usageHandle(request []byte) ([]byte, error) {
 	}
 	// inflight 配对属于“这次尝试”本身，必须在任何过滤之前完成；
 	// 否则将来 Provider 取值变化会让计数永久泄漏、账号永远 Busy。
+	p.releasePick(rec.AuthID)
 	p.store.InflightDec(rec.AuthID)
 	// 已删除账号：宿主 auth 文件仍在、usage 仍会来，但不得复活。
 	if p.store.IsPurged(rec.AuthID) {

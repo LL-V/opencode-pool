@@ -249,3 +249,82 @@ func TestExecuteAuthHeaderPerFormat(t *testing.T) {
 		t.Fatalf("chat/completions 不应带 x-api-key：%v", openai)
 	}
 }
+
+// 用户 2026-11-25：并发必须平均。宿主选号与 executor inflight++ 非原子，
+// 连续选号必须靠插件短期预约轮转，不能全部压到同一账号。
+func TestPickSpreadsConcurrentSelections(t *testing.T) {
+	host := &fakeHost{}
+	p := newTestPlugin(t, host)
+	ids := []string{"opencode-go:s1", "opencode-go:s2", "opencode-go:s3"}
+	for _, id := range ids {
+		p.Store().EnsureAccount(id)
+		p.Store().LearnLimit(id, 20)
+	}
+	pick := func() string {
+		raw, _ := json.Marshal(pluginapi.SchedulerPickRequest{
+			Provider: ProviderID, Model: "x",
+			Candidates: []pluginapi.SchedulerAuthCandidate{
+				{ID: ids[0], Provider: ProviderID, Priority: 1},
+				{ID: ids[1], Provider: ProviderID, Priority: 1},
+				{ID: ids[2], Provider: ProviderID, Priority: 1},
+			},
+		})
+		out, err := p.HandleMethod(pluginabi.MethodSchedulerPick, raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var env pluginabi.Envelope
+		_ = json.Unmarshal(out, &env)
+		var resp struct{ AuthID string }
+		_ = json.Unmarshal(env.Result, &resp)
+		return resp.AuthID
+	}
+	seen := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		id := pick()
+		if id == "" {
+			t.Fatalf("第 %d 次应选中账号", i+1)
+		}
+		if seen[id] {
+			t.Fatalf("连续选号应轮转，重复选中 %q；seen=%v", id, seen)
+		}
+		seen[id] = true
+	}
+	// usage 到达后释放预约：该账号重新变为最闲，应被再次选中。
+	call(t, p, pluginabi.MethodUsageHandle, pluginapi.UsageRecord{
+		RequestID: "rel-1", Provider: ProviderID, AuthID: "opencode-go:s1",
+	})
+	if got := pick(); got != "opencode-go:s1" {
+		t.Fatalf("预约释放后应重新选最闲账号：got %q", got)
+	}
+}
+
+// 未学习上限的账号也必须有默认并发闸门（约 20），不能无限堆。
+func TestUnknownLimitUsesAssumedCap(t *testing.T) {
+	host := &fakeHost{}
+	p := newTestPlugin(t, host)
+	hot, idle := "opencode-go:hot", "opencode-go:idle"
+	p.Store().EnsureAccount(hot)
+	p.Store().EnsureAccount(idle)
+	for i := 0; i < defaultAssumedConcurrencyLimit; i++ {
+		p.Store().InflightInc(hot)
+	}
+	raw, _ := json.Marshal(pluginapi.SchedulerPickRequest{
+		Provider: ProviderID, Model: "x",
+		Candidates: []pluginapi.SchedulerAuthCandidate{
+			{ID: hot, Provider: ProviderID, Priority: 9},
+			{ID: idle, Provider: ProviderID, Priority: 0},
+		},
+	})
+	out, err := p.HandleMethod(pluginabi.MethodSchedulerPick, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env pluginabi.Envelope
+	_ = json.Unmarshal(out, &env)
+	var resp struct{ AuthID string }
+	_ = json.Unmarshal(env.Result, &resp)
+	if resp.AuthID != idle {
+		t.Fatalf("达到默认并发上限的账号不得再被选中：got %q", resp.AuthID)
+	}
+}

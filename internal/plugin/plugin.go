@@ -17,7 +17,7 @@ import (
 const (
 	PluginID      = "opencode-pool"
 	ProviderID    = "opencode-go"
-	PluginVersion = "0.2.6"
+	PluginVersion = "0.2.7"
 )
 
 // Plugin is the assembled capability set plus runtime state.
@@ -40,6 +40,73 @@ type Plugin struct {
 	modelsMu   sync.Mutex
 	modelsIDs  []string
 	modelsAt   time.Time
+	// Short-lived reservations smooth concurrent picks: host selection and
+	// executor inflight++ are not atomic, so a burst of picks would otherwise
+	// all see the same idle account.
+	pickMu  sync.Mutex
+	pickRes map[string][]time.Time
+}
+
+// pickReservationTTL releases reservations whose usage event never arrived.
+const pickReservationTTL = 90 * time.Second
+
+func (p *Plugin) reservePick(id string) {
+	if id == "" {
+		return
+	}
+	p.pickMu.Lock()
+	defer p.pickMu.Unlock()
+	now := time.Now()
+	p.prunePickLocked(now)
+	if p.pickRes == nil {
+		p.pickRes = map[string][]time.Time{}
+	}
+	p.pickRes[id] = append(p.pickRes[id], now)
+}
+
+func (p *Plugin) releasePick(id string) {
+	if id == "" {
+		return
+	}
+	p.pickMu.Lock()
+	defer p.pickMu.Unlock()
+	now := time.Now()
+	p.prunePickLocked(now)
+	list := p.pickRes[id]
+	if len(list) == 0 {
+		return
+	}
+	if len(list) == 1 {
+		delete(p.pickRes, id)
+		return
+	}
+	p.pickRes[id] = list[1:]
+}
+
+func (p *Plugin) pickReservations(id string) int {
+	if id == "" {
+		return 0
+	}
+	p.pickMu.Lock()
+	defer p.pickMu.Unlock()
+	p.prunePickLocked(time.Now())
+	return len(p.pickRes[id])
+}
+
+func (p *Plugin) prunePickLocked(now time.Time) {
+	for id, list := range p.pickRes {
+		keep := list[:0]
+		for _, t := range list {
+			if now.Sub(t) <= pickReservationTTL {
+				keep = append(keep, t)
+			}
+		}
+		if len(keep) == 0 {
+			delete(p.pickRes, id)
+		} else {
+			p.pickRes[id] = keep
+		}
+	}
 }
 
 // autoFlushInterval is the periodic state.json persist cadence.
@@ -151,13 +218,23 @@ func (d storeDeps) Bad(id string) bool {
 	return d.p.store.AnyWindowExhausted(id, time.Now())
 }
 
+// defaultAssumedConcurrencyLimit caps accounts whose real limit has not been
+// learned yet (user: one OpenCode Go account allows ~20 concurrent requests).
+// Without it an unknown account is treated as unlimited and can be pushed to
+// 30+ in-flight while peers idle (real report 2026-11-25).
+const defaultAssumedConcurrencyLimit = 20
+
 func (d storeDeps) Busy(id string) bool {
 	snap := d.p.store.Snapshot()
 	acc := snap.Accounts[id]
-	if acc == nil || acc.LearnedConcurrencyLimit <= 0 {
-		return false // unknown limit never busy
+	limit := 0
+	if acc != nil {
+		limit = acc.LearnedConcurrencyLimit
 	}
-	return snap.Inflight[id] >= acc.LearnedConcurrencyLimit
+	if limit <= 0 {
+		limit = defaultAssumedConcurrencyLimit
+	}
+	return snap.Inflight[id]+d.p.pickReservations(id) >= limit
 }
 
 func (d storeDeps) Near(id string) bool {
@@ -202,7 +279,7 @@ func (d storeDeps) Pressure(id string) (float64, bool) {
 }
 
 func (d storeDeps) Inflight(id string) int {
-	return d.p.store.Snapshot().Inflight[id]
+	return d.p.store.Snapshot().Inflight[id] + d.p.pickReservations(id)
 }
 
 func (d storeDeps) BoundAuth(sid string) (string, bool) {

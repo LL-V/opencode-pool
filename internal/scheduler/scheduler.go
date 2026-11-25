@@ -41,40 +41,36 @@ type Deps interface {
 	EarliestRecovery() time.Time // among bad candidates, for Reject reason
 }
 
-// Pick applies the M6 policy. Affinity precedes the yield decision: a
-// request whose session is bound to a healthy candidate is picked by the
-// plugin even in an otherwise healthy pool, because the host scheduler does
-// not track our x-opencode-session bindings — yielding would rotate accounts
-// and destroy upstream prompt-cache affinity for header-less clients.
+// Pick balances load across the candidate pool. The old "yield when all
+// healthy" policy let the host's built-in picker concentrate thousands of
+// requests on one account (real report 2026-11-25: 1.4k requests / 33
+// inflight on one account while peers idled). The plugin now always makes
+// the decision so it can spread concurrency evenly.
+//
+// Session affinity still wins for a healthy (not busy, not near) bound
+// account to preserve prompt cache; once it is busy/near the conversation
+// migrates to the least-loaded peer (cache loss accepted, same as R10).
 func Pick(in Input, deps Deps) Decision {
 	now := in.Now
 	if now.IsZero() {
 		now = time.Now()
 	}
-	var bad, near, busy bool
 	cands := make([]Candidate, 0, len(in.Candidates))
 	for _, c := range in.Candidates {
-		cBad := deps.Bad(c.ID)
-		bad = bad || cBad
-		near = near || (!cBad && deps.Near(c.ID))
-		busy = busy || (!cBad && deps.Busy(c.ID))
-		if !cBad {
+		if !deps.Bad(c.ID) {
 			cands = append(cands, c)
 		}
 	}
-	// Affinity first: bound auth wins unless bad (the host already excluded
-	// tried candidates; a bound auth outside cands falls through below).
+	// Affinity first, but only while the bound account is not saturated:
+	// sticking a busy account would pile even more concurrency onto it.
 	if in.SessionID != "" {
 		if bound, ok := deps.BoundAuth(in.SessionID); ok {
 			for _, c := range cands {
-				if c.ID == bound {
+				if c.ID == bound && !deps.Busy(bound) && !deps.Near(bound) {
 					return Decision{Handled: true, AuthID: bound}
 				}
 			}
 		}
-	}
-	if !bad && !near && !busy {
-		return Decision{} // yield: Handled=false
 	}
 	if len(cands) == 0 {
 		reason := "no auth available"
@@ -89,14 +85,19 @@ func Pick(in Input, deps Deps) Decision {
 	}
 	sort.SliceStable(cands, func(i, j int) bool {
 		a, b := cands[i], cands[j]
-		if a.Priority != b.Priority {
-			return a.Priority > b.Priority
-		}
 		if deps.Busy(a.ID) != deps.Busy(b.ID) {
 			return !deps.Busy(a.ID)
 		}
 		if deps.Near(a.ID) != deps.Near(b.ID) {
 			return !deps.Near(a.ID)
+		}
+		// 并发平均优先于优先级：否则高优先级账号会先被连续选中，
+		// 直到 busy 才溢出到其他号（用户实测 33/20 vs 全 0 的根源）。
+		if ia, ib := deps.Inflight(a.ID), deps.Inflight(b.ID); ia != ib {
+			return ia < ib
+		}
+		if a.Priority != b.Priority {
+			return a.Priority > b.Priority
 		}
 		pa, oka := deps.Pressure(a.ID)
 		pb, okb := deps.Pressure(b.ID)
@@ -105,9 +106,6 @@ func Pick(in Input, deps Deps) Decision {
 		}
 		if oka && pa != pb {
 			return pa > pb
-		}
-		if ia, ib := deps.Inflight(a.ID), deps.Inflight(b.ID); ia != ib {
-			return ia < ib
 		}
 		return a.ID < b.ID
 	})

@@ -247,6 +247,9 @@ func (p *Plugin) pick(request []byte) ([]byte, error) {
 		}
 	}
 	dec := scheduler.Pick(scheduler.Input{Candidates: cands, SessionID: sid}, storeDeps{p: p, cands: live})
+	if dec.Handled && !dec.Reject && dec.AuthID != "" {
+		p.reservePick(dec.AuthID) // smooth bursts before executor inflight++
+	}
 	resp := pluginapi.SchedulerPickResponse{
 		AuthID:       dec.AuthID,
 		Handled:      dec.Handled,

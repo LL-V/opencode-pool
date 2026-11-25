@@ -221,7 +221,7 @@ function render(){
     <div class="quotas">${quotaRows(a)}</div>
     <div class="stats">
       <div class="stat"><span>请求</span><b>${fmt(u.requests)}</b></div>
-      <div class="stat"><span>并发</span><b>${a.inflight??0}<span style="color:var(--faint);font-weight:400">/${a.learned_concurrency_limit||"–"}</span></b></div>
+      <div class="stat" title="${a.learned_concurrency_limit?"已学习并发上限 "+a.learned_concurrency_limit:"尚未学习，按默认上限 20 控制"}"><span>并发</span><b>${a.inflight??0}<span style="color:var(--faint);font-weight:400">/${a.learned_concurrency_limit||20}</span></b></div>
       <div class="stat"><span>输入 tok</span><b>${fmt(u.input_tokens)}</b></div>
       <div class="stat"><span>输出 tok</span><b>${fmt(u.output_tokens)}</b></div>
     </div>

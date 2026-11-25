@@ -35,11 +35,13 @@ func (d fakeDeps) BoundAuth(sid string) (string, bool) {
 
 func cand(id string, prio int) Candidate { return Candidate{ID: id, Priority: prio} }
 
-func TestYieldWhenAllHealthy(t *testing.T) {
+// 用户 2026-11-25：并发必须平均，不能全压在一个账号上。全健康时插件也必须
+// 亲自选（旧“让权给宿主”导致 1.4k 请求集中在一个号）。
+func TestHandlesWhenAllHealthy(t *testing.T) {
 	d := fakeDeps{hasPct: map[string]bool{}}
 	got := Pick(Input{Candidates: []Candidate{cand("a", 0), cand("b", 0)}, Now: ts(0)}, d)
-	if got.Handled || got.Reject || got.AuthID != "" {
-		t.Fatalf("全健康应让权：got %+v", got)
+	if !got.Handled || got.Reject || (got.AuthID != "a" && got.AuthID != "b") {
+		t.Fatalf("全健康也应接管并选号：got %+v", got)
 	}
 }
 
@@ -72,7 +74,7 @@ func TestRejectWhenAllBad(t *testing.T) {
 	}
 }
 
-func TestAffinityPicksBoundEvenNearOrBusy(t *testing.T) {
+func TestAffinityMovesOffBusyBound(t *testing.T) {
 	d := fakeDeps{
 		near:   map[string]bool{"bound": true},
 		busy:   map[string]bool{"bound": true},
@@ -80,8 +82,8 @@ func TestAffinityPicksBoundEvenNearOrBusy(t *testing.T) {
 		hasPct: map[string]bool{},
 	}
 	got := Pick(Input{Candidates: []Candidate{cand("other", 5), cand("bound", 0)}, SessionID: "sid", Now: ts(0)}, d)
-	if !got.Handled || got.AuthID != "bound" {
-		t.Fatalf("黄红闸门：绑定号 near/busy 仍应选中：got %+v", got)
+	if !got.Handled || got.AuthID != "other" {
+		t.Fatalf("绑定号 busy/near 时必须迁移到健康号：got %+v", got)
 	}
 }
 
@@ -94,16 +96,16 @@ func TestAffinityFallsBackWhenBoundBad(t *testing.T) {
 		hasPct: map[string]bool{},
 	}
 	got := Pick(Input{Candidates: []Candidate{cand("healthy", 0)}, SessionID: "sid", Now: ts(0)}, d)
-	if got.Handled || got.AuthID == "bound" {
-		t.Fatalf("绑定号 bad 应让权且绝不回选：got %+v", got)
+	if !got.Handled || got.AuthID != "healthy" {
+		t.Fatalf("绑定号 bad 应改选健康号：got %+v", got)
 	}
 }
 
 func TestAffinityFallsBackWhenBoundNotCandidate(t *testing.T) {
 	d := fakeDeps{bindTo: "absent", hasPct: map[string]bool{}}
 	got := Pick(Input{Candidates: []Candidate{cand("healthy", 0)}, SessionID: "sid", Now: ts(0)}, d)
-	if got.Handled {
-		t.Fatalf("绑定号不在候选（tried/bad）且池健康应让权（绑定由下次成功迁移）：got %+v", got)
+	if !got.Handled || got.AuthID != "healthy" {
+		t.Fatalf("绑定号不在候选时应改选健康号：got %+v", got)
 	}
 }
 
