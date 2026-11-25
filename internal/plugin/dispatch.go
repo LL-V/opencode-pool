@@ -224,6 +224,11 @@ func (p *Plugin) pick(request []byte) ([]byte, error) {
 	if err := json.Unmarshal(request, &req); err != nil {
 		return nil, err
 	}
+	// 宿主对所有 provider 都调用本插件的选号。请求不属于本池时直接让权，
+	// 由宿主内置选号处理 claude/openai 等模型。
+	if req.Provider != "" && req.Provider != ProviderID {
+		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
+	}
 	cands := make([]scheduler.Candidate, 0, len(req.Candidates))
 	live := map[string]bool{}
 	for _, c := range req.Candidates {
@@ -237,6 +242,11 @@ func (p *Plugin) pick(request []byte) ([]byte, error) {
 		}
 		cands = append(cands, scheduler.Candidate{ID: c.ID, Priority: c.Priority})
 		live[c.ID] = true
+	}
+	// 没有本池候选（例如 claude 模型）：必须让权。返回 Reject 会让宿主
+	// 直接 503 auth_unavailable，把其他 provider 的请求一起打死。
+	if len(cands) == 0 {
+		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
 	}
 	sid := ""
 	// 绑定键优先用宿主 canonical session（Options.Metadata["canonical_session_id"]，

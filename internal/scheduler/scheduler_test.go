@@ -169,3 +169,12 @@ func TestBusyUnknownLimitIsNotBusy(t *testing.T) {
 		t.Fatalf("未知上限不判 busy：got %+v", got)
 	}
 }
+
+// 空候选（无账号或全部属于别的 provider）不得 Reject：宿主只认 Reject
+// 会回 503，把所有非本池模型一并打死。必须让权给宿主内置选号。
+func TestEmptyCandidatesYields(t *testing.T) {
+	got := Pick(Input{Now: ts(0)}, fakeDeps{hasPct: map[string]bool{}})
+	if got.Handled || got.Reject {
+		t.Fatalf("空候选应让权：got %+v", got)
+	}
+}

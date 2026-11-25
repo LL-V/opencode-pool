@@ -55,6 +55,11 @@ func Pick(in Input, deps Deps) Decision {
 	if now.IsZero() {
 		now = time.Now()
 	}
+	// 无候选可判：交还宿主。宿主只认 Handled+Reject，空池 Reject 会让
+	// 非本池模型（claude 等）也得到 503。
+	if len(in.Candidates) == 0 {
+		return Decision{}
+	}
 	cands := make([]Candidate, 0, len(in.Candidates))
 	for _, c := range in.Candidates {
 		if !deps.Bad(c.ID) {
